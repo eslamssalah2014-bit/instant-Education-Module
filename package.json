@@ -21,6 +21,7 @@
     "canvas-confetti": "^1.9.4",
     "clsx": "^2.1.1",
     "cors": "^2.8.5",
+    "dotenv": "^18.0.5",
     "express": "^4.21.2",
     "jspdf": "^2.5.2",
     "jspdf-autotable": "^3.8.4",
