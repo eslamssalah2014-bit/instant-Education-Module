@@ -12,6 +12,7 @@ interface AuthContextType {
   isHeadOfTrack: boolean;
   isQaTeam: boolean;
   isInstructor: boolean;
+  isObserver: boolean;
   canCreateObservation: boolean;
   canManageTemplates: boolean;
   canAccessReports: boolean;
@@ -60,8 +61,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const isHeadOfTrack = currentUser?.roleType === 'HEAD_OF_TRACK';
   const isQaTeam = currentUser?.roleType === 'QA_TEAM';
   const isInstructor = currentUser?.roleType === 'INSTRUCTOR';
+  const isObserver = currentUser?.roleType === 'OBSERVER';
 
-  const canCreateObservation = isEducationManager || isHeadOfTrack || isQaTeam;
+  const canCreateObservation = isEducationManager || isHeadOfTrack || isQaTeam || isObserver;
   const canManageTemplates = isEducationManager;
   const canAccessReports = isEducationManager || isQaTeam || isHeadOfTrack;
   const canExportReports = isEducationManager || isQaTeam;
@@ -76,6 +78,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       isHeadOfTrack,
       isQaTeam,
       isInstructor,
+      isObserver,
       canCreateObservation,
       canManageTemplates,
       canAccessReports,

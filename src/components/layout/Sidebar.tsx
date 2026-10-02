@@ -9,6 +9,10 @@ import {
   ShieldAlert,
   ChevronRight,
   BookOpen,
+  Users2,
+  Target,
+  Sparkles,
+  MessageSquare,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
@@ -26,6 +30,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, isOpe
     isHeadOfTrack,
     isQaTeam,
     isInstructor,
+    isObserver,
     canCreateObservation,
     canManageTemplates,
     canAccessReports,
@@ -36,8 +41,15 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, isOpe
       id: 'dashboard',
       label: 'Dashboard',
       icon: LayoutDashboard,
-      show: isEducationManager || isHeadOfTrack || isQaTeam,
+      show: isEducationManager || isHeadOfTrack || isQaTeam || isObserver,
       badge: isHeadOfTrack ? 'Track' : undefined,
+    },
+    {
+      id: 'instructors',
+      label: 'Faculty & Instructors',
+      icon: Users2,
+      show: isEducationManager || isHeadOfTrack || isQaTeam,
+      badge: 'Tiers',
     },
     {
       id: 'observations',
@@ -54,8 +66,26 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, isOpe
       highlight: true,
     },
     {
+      id: 'kpis',
+      label: 'KPI Management',
+      icon: Target,
+      show: isEducationManager || isHeadOfTrack || isQaTeam,
+    },
+    {
+      id: 'coaching',
+      label: 'Coaching & Mentorship',
+      icon: Sparkles,
+      show: isEducationManager || isHeadOfTrack || isQaTeam,
+    },
+    {
+      id: 'feedback-quality',
+      label: 'Feedback & Quality',
+      icon: MessageSquare,
+      show: isEducationManager || isHeadOfTrack || isQaTeam,
+    },
+    {
       id: 'criteria-management',
-      label: 'Criteria & Templates',
+      label: 'Criteria & Rubrics',
       icon: FileCheck2,
       show: canManageTemplates,
       badge: 'v1.1',

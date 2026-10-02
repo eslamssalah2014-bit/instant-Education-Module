@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   X,
   FileDown,
@@ -13,37 +13,66 @@ import {
   Lightbulb,
   FileText,
   BadgePercent,
+  Clock,
+  ArrowRight,
+  TrendingUp,
+  Archive,
+  Edit,
 } from 'lucide-react';
-import { Observation } from '../../types';
+import { Observation, ObservationStatus, getTierBadgeClass } from '../../types';
 import { exportSingleObservationPDF } from '../../utils/export';
+import { api } from '../../services/api';
 
 interface ObservationDetailsModalProps {
   observation: Observation | null;
   onClose: () => void;
+  onEdit?: (obs: Observation) => void;
+  onStatusChange?: (obsId: string, newStatus: ObservationStatus) => void;
 }
 
 export const ObservationDetailsModal: React.FC<ObservationDetailsModalProps> = ({
   observation,
   onClose,
+  onEdit,
+  onStatusChange,
 }) => {
   if (!observation) return null;
 
-  const getGradeBadge = (grade?: string) => {
-    switch (grade) {
-      case 'Outstanding':
-        return 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border-emerald-300';
-      case 'Proficient':
-        return 'bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300 border-blue-300';
-      case 'Developing':
-        return 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border-amber-300';
-      default:
-        return 'bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300 border-rose-300';
+  const [currentStatus, setCurrentStatus] = useState<ObservationStatus>(observation.status);
+  const [actionPlanItems, setActionPlanItems] = useState(observation.actionPlan || []);
+  const [isUpdating, setIsUpdating] = useState(false);
+
+  const tier = observation.tier || 'A';
+
+  const handleUpdateStatus = async (status: ObservationStatus) => {
+    try {
+      setIsUpdating(true);
+      await api.updateObservationStatus(observation.id, status);
+      setCurrentStatus(status);
+      if (onStatusChange) onStatusChange(observation.id, status);
+    } catch (err) {
+      console.error('Failed to update observation status:', err);
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  const getStatusBadge = (status: ObservationStatus) => {
+    switch (status) {
+      case 'DRAFT':
+        return 'bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-300';
+      case 'SUBMITTED':
+        return 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300';
+      case 'REVIEWED':
+        return 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300';
+      case 'ARCHIVED':
+        return 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300';
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm animate-in fade-in">
-      <div className="flex max-h-[90vh] w-full max-w-4xl flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-900 overflow-hidden">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm animate-in fade-in">
+      <div className="flex max-h-[92vh] w-full max-w-4xl flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-900 overflow-hidden">
         {/* Modal Header */}
         <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40">
           <div className="flex items-center gap-3">
@@ -58,220 +87,246 @@ export const ObservationDetailsModal: React.FC<ObservationDetailsModalProps> = (
                 <span className="font-mono text-xs font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded border border-indigo-200 dark:border-indigo-800">
                   {observation.observationCode}
                 </span>
+                <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${getStatusBadge(currentStatus)}`}>
+                  {currentStatus}
+                </span>
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Evaluation recorded under template version {observation.templateVersion?.versionNumber || 'v1.0'}
+                Evaluation recorded under template version {observation.templateVersion?.versionNumber || 'v1.1'}
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
+            {onEdit && (
+              <button
+                onClick={() => {
+                  onClose();
+                  onEdit(observation);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:text-indigo-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+              >
+                <Edit className="h-3.5 w-3.5" /> Edit
+              </button>
+            )}
+
             <button
               onClick={() => exportSingleObservationPDF(observation)}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 shadow-sm"
+              title="Export Formal Audit PDF"
             >
-              <FileDown className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
-              <span>Export PDF</span>
+              <FileDown className="h-3.5 w-3.5 text-indigo-600" /> Export PDF
             </button>
+
             <button
               onClick={onClose}
-              className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-200 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+              className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200"
             >
               <X className="h-5 w-5" />
             </button>
           </div>
         </div>
 
-        {/* Modal Body */}
+        {/* Modal Scroll Body */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          {/* Observation Information Cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 rounded-xl border border-slate-100 bg-slate-50/80 p-4 dark:border-slate-800 dark:bg-slate-800/40">
-            <div>
-              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide block">Instructor</span>
-              <span className="text-sm font-bold text-slate-900 dark:text-white mt-0.5 block">
-                {observation.instructor?.user?.name}
-              </span>
-              <span className="text-[10px] text-slate-500">{observation.instructor?.title}</span>
-            </div>
-
-            <div>
-              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide block">Group & Track</span>
-              <span className="text-sm font-bold text-slate-900 dark:text-white mt-0.5 block truncate">
-                {observation.group?.name}
-              </span>
-              <span className="text-[10px] text-indigo-600 dark:text-indigo-400 font-medium">
-                {observation.track?.name} Track
-              </span>
-            </div>
-
-            <div>
-              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide block">Observer</span>
-              <span className="text-sm font-bold text-slate-900 dark:text-white mt-0.5 block">
-                {observation.observer?.name}
-              </span>
-              <span className="text-[10px] text-slate-500 font-mono">
-                {observation.observer?.roleType.replace(/_/g, ' ')}
-              </span>
-            </div>
-
-            <div>
-              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide block">Evaluation Type</span>
-              <span className="text-sm font-bold text-slate-900 dark:text-white mt-0.5 block">
-                {observation.type === 'TECHNICAL' ? 'Technical Observation' : 'Non-Technical Observation'}
-              </span>
-              <span className="text-[10px] text-slate-500">
-                {new Date(observation.observationDate).toLocaleDateString()}
-              </span>
-            </div>
-          </div>
-
-          {/* Score Summary Banner */}
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-4 rounded-xl border border-indigo-100 bg-gradient-to-r from-indigo-500/10 via-indigo-500/5 to-purple-500/10 p-4 dark:border-indigo-900/50">
-            <div className="flex items-center gap-4">
-              <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-600 text-white shadow-md">
-                <span className="text-xl font-extrabold">{observation.totalScore}</span>
-              </div>
+          {/* Header Summary Banner */}
+          <div className="rounded-xl border border-slate-200 bg-gradient-to-br from-indigo-50/60 via-purple-50/30 to-white p-5 dark:border-slate-800 dark:from-indigo-950/30 dark:via-purple-950/10 dark:to-slate-900">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div>
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-bold text-slate-900 dark:text-white">
-                    Overall Performance Index
-                  </span>
-                  <span className={`text-xs font-bold px-2 py-0.5 rounded-full border ${getGradeBadge(observation.grade)}`}>
-                    {observation.grade}
-                  </span>
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Instructor</span>
+                <div className="font-bold text-slate-900 dark:text-white mt-0.5">
+                  {observation.instructor?.user?.name || 'Academic Faculty'}
                 </div>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  Calculated from 100% weighted rubric criteria with rubric version{' '}
-                  {observation.templateVersion?.versionNumber}
-                </p>
+                <div className="text-xs text-slate-500">
+                  {observation.instructor?.employeeId} • {observation.track?.name}
+                </div>
               </div>
-            </div>
 
-            <div className="flex items-center gap-6">
+              <div>
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Classroom Cohort</span>
+                <div className="font-bold text-slate-900 dark:text-white mt-0.5">
+                  {observation.group?.name || 'Cohort'}
+                </div>
+                <div className="text-xs text-slate-500">
+                  {observation.group?.code} • {observation.type}
+                </div>
+              </div>
+
+              <div>
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Lead Observer</span>
+                <div className="font-bold text-slate-900 dark:text-white mt-0.5">
+                  {observation.observer?.name || 'Auditor'}
+                </div>
+                <div className="text-xs text-slate-500">
+                  {observation.observer?.roleType?.replace(/_/g, ' ')}
+                </div>
+              </div>
+
               <div className="text-right">
-                <span className="text-[11px] text-slate-400 uppercase tracking-wide block">Weighted Score</span>
-                <span className="text-xl font-extrabold text-indigo-600 dark:text-indigo-400">
-                  {observation.weightedScore}%
-                </span>
-              </div>
-              <div className="text-right">
-                <span className="text-[11px] text-slate-400 uppercase tracking-wide block">Status</span>
-                <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-600 dark:text-emerald-400">
-                  <CheckCircle2 className="h-3.5 w-3.5" /> {observation.status}
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Score & Classification</span>
+                <div className="flex items-center justify-end gap-2 mt-0.5">
+                  <span className="font-mono text-2xl font-extrabold text-slate-900 dark:text-white">
+                    {observation.percentageScore.toFixed(1)}%
+                  </span>
+                  <span className={`px-2 py-0.5 rounded-full text-xs font-bold border ${getTierBadgeClass(tier)}`}>
+                    Tier {tier}
+                  </span>
+                </div>
+                <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                  {observation.grade}
                 </span>
               </div>
             </div>
           </div>
 
-          {/* Criteria Results Table */}
-          <div>
-            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-3 flex items-center gap-1.5">
-              <Award className="h-4 w-4 text-indigo-600" />
-              Criteria Results Breakdown
+          {/* Workflow Status Controls */}
+          <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-xl border border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-850">
+            <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+              Observation Workflow Status Transitions:
+            </span>
+            <div className="flex items-center gap-2">
+              {currentStatus === 'DRAFT' && (
+                <button
+                  disabled={isUpdating}
+                  onClick={() => handleUpdateStatus('SUBMITTED')}
+                  className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700"
+                >
+                  Submit for Formal Review
+                </button>
+              )}
+              {currentStatus === 'SUBMITTED' && (
+                <button
+                  disabled={isUpdating}
+                  onClick={() => handleUpdateStatus('REVIEWED')}
+                  className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
+                >
+                  Mark as Reviewed & Approved
+                </button>
+              )}
+              {currentStatus !== 'ARCHIVED' && (
+                <button
+                  disabled={isUpdating}
+                  onClick={() => handleUpdateStatus('ARCHIVED')}
+                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 flex items-center gap-1"
+                >
+                  <Archive className="h-3.5 w-3.5" /> Archive
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Rubric Criteria Evaluation Breakdown */}
+          <div className="space-y-3">
+            <h4 className="text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+              Rubric Criteria Score Breakdown
             </h4>
-
-            <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="border-b border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-800 dark:bg-slate-800/60 dark:text-slate-300">
-                    <th className="py-2.5 px-4 font-semibold">Criterion Name</th>
-                    <th className="py-2.5 px-3 font-semibold text-center">Weight</th>
-                    <th className="py-2.5 px-3 font-semibold text-center">Score (1-10)</th>
-                    <th className="py-2.5 px-3 font-semibold text-center">Weighted Score</th>
-                    <th className="py-2.5 px-4 font-semibold">Evaluator Notes & Feedback</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {(observation.scores || []).map((score) => (
-                    <tr key={score.id} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/30">
-                      <td className="py-3 px-4 font-semibold text-slate-800 dark:text-slate-200">
-                        {score.criterionName}
-                      </td>
-                      <td className="py-3 px-3 text-center text-slate-500 font-mono">
-                        {score.weight}%
-                      </td>
-                      <td className="py-3 px-3 text-center">
-                        <span className="inline-block rounded-md bg-slate-100 px-2 py-1 font-bold text-slate-800 dark:bg-slate-800 dark:text-slate-100">
-                          {score.score} / 10
-                        </span>
-                      </td>
-                      <td className="py-3 px-3 text-center font-bold text-indigo-600 dark:text-indigo-400">
-                        {score.weightedScore} pts
-                      </td>
-                      <td className="py-3 px-4 text-slate-600 dark:text-slate-300 italic">
-                        "{score.feedback || 'Satisfactory execution.'}"
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="space-y-2.5">
+              {observation.scores?.map((sc, i) => (
+                <div
+                  key={sc.id || i}
+                  className="rounded-xl border border-slate-150 bg-slate-50/50 p-4 dark:border-slate-800 dark:bg-slate-800/30 space-y-1.5"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-sm text-slate-800 dark:text-slate-200">
+                      {sc.criterionName}
+                    </span>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-slate-400 font-mono">Weight: {sc.weight}%</span>
+                      <span className="font-mono text-base font-bold text-indigo-600 dark:text-indigo-400">
+                        {sc.score}/10
+                      </span>
+                    </div>
+                  </div>
+                  {sc.feedback && (
+                    <p className="text-xs text-slate-600 dark:text-slate-300 italic pl-2 border-l-2 border-indigo-400">
+                      "{sc.feedback}"
+                    </p>
+                  )}
+                </div>
+              ))}
             </div>
           </div>
 
-          {/* Qualitative Overall Feedback Sections */}
-          <div className="space-y-4">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
-              <FileText className="h-4 w-4 text-indigo-600" />
-              Overall Feedback & Academic Action Plan
-            </h4>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {/* Strengths */}
-              <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 dark:border-emerald-900/40 dark:bg-emerald-950/20">
-                <div className="flex items-center gap-2 text-emerald-800 dark:text-emerald-300 font-bold text-xs mb-2">
-                  <Sparkles className="h-4 w-4 text-emerald-600" />
-                  Key Strengths
-                </div>
-                <p className="text-xs leading-relaxed text-slate-700 dark:text-slate-300">
-                  {observation.feedback?.strengths || 'No specific strengths entered.'}
-                </p>
-              </div>
-
-              {/* Areas for Improvement */}
-              <div className="rounded-xl border border-amber-200 bg-amber-50/40 p-4 dark:border-amber-900/40 dark:bg-amber-950/20">
-                <div className="flex items-center gap-2 text-amber-800 dark:text-amber-300 font-bold text-xs mb-2">
-                  <AlertTriangle className="h-4 w-4 text-amber-600" />
-                  Areas for Improvement
-                </div>
-                <p className="text-xs leading-relaxed text-slate-700 dark:text-slate-300">
-                  {observation.feedback?.areasForImprovement || 'None noted.'}
-                </p>
-              </div>
-
-              {/* Recommendations */}
-              <div className="rounded-xl border border-indigo-200 bg-indigo-50/40 p-4 dark:border-indigo-900/40 dark:bg-indigo-950/20">
-                <div className="flex items-center gap-2 text-indigo-800 dark:text-indigo-300 font-bold text-xs mb-2">
-                  <Lightbulb className="h-4 w-4 text-indigo-600" />
-                  Actionable Recommendations
-                </div>
-                <p className="text-xs leading-relaxed text-slate-700 dark:text-slate-300">
-                  {observation.feedback?.recommendations || 'Maintain current instructional pace.'}
-                </p>
+          {/* Corrective Action Plan */}
+          {actionPlanItems.length > 0 && (
+            <div className="space-y-3">
+              <h4 className="text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                <TrendingUp className="h-4 w-4 text-indigo-600" /> Corrective Action Plan & Target Milestones
+              </h4>
+              <div className="space-y-2">
+                {actionPlanItems.map((ap) => (
+                  <div
+                    key={ap.id}
+                    className="p-3.5 rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-850 flex items-center justify-between"
+                  >
+                    <div>
+                      <div className="font-semibold text-xs text-slate-900 dark:text-white">
+                        {ap.objective}
+                      </div>
+                      <div className="text-xs text-slate-500 mt-0.5">
+                        {ap.actionSteps}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[11px] font-mono text-slate-400 block">Due: {ap.deadline}</span>
+                      <span className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400">
+                        Owner: {ap.assignedTo}
+                      </span>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
+          )}
 
-            {/* General Comments */}
-            {observation.feedback?.generalComments && (
-              <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
-                <span className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                  Evaluator General Observations
-                </span>
-                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                  {observation.feedback.generalComments}
-                </p>
+          {/* Qualitative Synthesis Feedback */}
+          {observation.feedback && (
+            <div className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+              <h4 className="text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                Evaluator Feedback & Strategic Recommendations
+              </h4>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                <div className="p-3 rounded-lg bg-emerald-50/50 border border-emerald-100 dark:bg-emerald-950/20 dark:border-emerald-900/40">
+                  <span className="font-bold text-emerald-800 dark:text-emerald-300 block mb-1">
+                    Key Strengths Observed:
+                  </span>
+                  <p className="text-slate-700 dark:text-slate-300">
+                    {observation.feedback.strengths}
+                  </p>
+                </div>
+
+                <div className="p-3 rounded-lg bg-amber-50/50 border border-amber-100 dark:bg-amber-950/20 dark:border-amber-900/40">
+                  <span className="font-bold text-amber-800 dark:text-amber-300 block mb-1">
+                    Areas for Development:
+                  </span>
+                  <p className="text-slate-700 dark:text-slate-300">
+                    {observation.feedback.areasForImprovement}
+                  </p>
+                </div>
+
+                <div className="md:col-span-2 p-3 rounded-lg bg-slate-50 border border-slate-100 dark:bg-slate-800/40 dark:border-slate-800">
+                  <span className="font-bold text-slate-800 dark:text-slate-200 block mb-1">
+                    General Comments:
+                  </span>
+                  <p className="text-slate-700 dark:text-slate-300">
+                    {observation.feedback.generalComments}
+                  </p>
+                </div>
+
+                {observation.feedback.recommendations && (
+                  <div className="md:col-span-2 p-3 rounded-lg bg-indigo-50/50 border border-indigo-100 dark:bg-indigo-950/20 dark:border-indigo-900/40">
+                    <span className="font-bold text-indigo-800 dark:text-indigo-300 block mb-1">
+                      Actionable Recommendations:
+                    </span>
+                    <p className="text-slate-700 dark:text-slate-300">
+                      {observation.feedback.recommendations}
+                    </p>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-        </div>
-
-        {/* Modal Footer */}
-        <div className="flex items-center justify-end border-t border-slate-200 px-6 py-3 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40">
-          <button
-            onClick={onClose}
-            className="rounded-lg bg-slate-800 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-slate-900 dark:bg-slate-700 dark:hover:bg-slate-600"
-          >
-            Close Observation
-          </button>
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -2,46 +2,96 @@ import React, { useState, useEffect } from 'react';
 import { Sidebar } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
 import { DashboardPage } from './pages/Dashboard/DashboardPage';
+import { InstructorsPage } from './pages/Instructors/InstructorsPage';
 import { ObservationsPage } from './pages/Observations/ObservationsPage';
 import { CreateObservationPage } from './pages/CreateObservation/CreateObservationPage';
+import { KpiManagementPage } from './pages/KpiManagement/KpiManagementPage';
+import { CoachingPage } from './pages/Coaching/CoachingPage';
+import { FeedbackQualityPage } from './pages/FeedbackQuality/FeedbackQualityPage';
 import { CriteriaManagementPage } from './pages/CriteriaManagement/CriteriaManagementPage';
 import { InstructorPortalPage } from './pages/InstructorPortal/InstructorPortalPage';
 import { ReportsPage } from './pages/Reports/ReportsPage';
 import { AuditLogsPage } from './pages/AuditLogs/AuditLogsPage';
 import { useAuth } from './context/AuthContext';
+import { Observation } from './types';
 
 export const AppContent: React.FC = () => {
-  const { currentUser, isInstructor, canCreateObservation, canManageTemplates } = useAuth();
+  const { currentUser, isInstructor } = useAuth();
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(true);
+  const [editingObservation, setEditingObservation] = useState<Observation | null>(null);
 
-  // Auto-route instructors to the instructor portal if on restricted tab
+  // Auto-route instructors to instructor portal if visiting restricted manager screens
   useEffect(() => {
     if (isInstructor) {
-      if (currentTab === 'dashboard' || currentTab === 'create-observation' || currentTab === 'criteria-management') {
+      if (
+        currentTab === 'dashboard' ||
+        currentTab === 'create-observation' ||
+        currentTab === 'criteria-management' ||
+        currentTab === 'instructors' ||
+        currentTab === 'audit-logs'
+      ) {
         setCurrentTab('instructor-portal');
-      }
-    } else {
-      if (currentTab === 'instructor-portal' && currentUser?.roleType === 'EDUCATION_MANAGER') {
-        // keep or switch
       }
     }
   }, [currentUser, isInstructor]);
 
+  const handleEditObservation = (obs: Observation) => {
+    setEditingObservation(obs);
+    setCurrentTab('create-observation');
+  };
+
+  const handleFinishObservation = () => {
+    setEditingObservation(null);
+    setCurrentTab('observations');
+  };
+
   const renderActiveTab = () => {
     switch (currentTab) {
       case 'dashboard':
-        return <DashboardPage />;
+        return (
+          <DashboardPage
+            onNavigateToInstructors={() => setCurrentTab('instructors')}
+            onNavigateToObservations={() => setCurrentTab('observations')}
+            onNavigateToCoaching={() => setCurrentTab('coaching')}
+          />
+        );
+      case 'instructors':
+        return (
+          <InstructorsPage
+            onNavigateToObservation={(instId) => {
+              setEditingObservation(null);
+              setCurrentTab('create-observation');
+            }}
+          />
+        );
       case 'observations':
-        return <ObservationsPage onNavigateToCreate={() => setCurrentTab('create-observation')} />;
+        return (
+          <ObservationsPage
+            onNavigateToCreate={() => {
+              setEditingObservation(null);
+              setCurrentTab('create-observation');
+            }}
+            onNavigateToEdit={handleEditObservation}
+          />
+        );
       case 'create-observation':
         return (
           <CreateObservationPage
-            onObservationCreated={(obsId) => {
+            editingObservation={editingObservation}
+            onObservationCreated={handleFinishObservation}
+            onCancel={() => {
+              setEditingObservation(null);
               setCurrentTab('observations');
             }}
           />
         );
+      case 'kpis':
+        return <KpiManagementPage />;
+      case 'coaching':
+        return <CoachingPage />;
+      case 'feedback-quality':
+        return <FeedbackQualityPage />;
       case 'criteria-management':
         return <CriteriaManagementPage />;
       case 'instructor-portal':
@@ -51,7 +101,13 @@ export const AppContent: React.FC = () => {
       case 'audit-logs':
         return <AuditLogsPage />;
       default:
-        return <DashboardPage />;
+        return (
+          <DashboardPage
+            onNavigateToInstructors={() => setCurrentTab('instructors')}
+            onNavigateToObservations={() => setCurrentTab('observations')}
+            onNavigateToCoaching={() => setCurrentTab('coaching')}
+          />
+        );
     }
   };
 
@@ -60,7 +116,12 @@ export const AppContent: React.FC = () => {
       {/* Sidebar Navigation */}
       <Sidebar
         currentTab={currentTab}
-        onSelectTab={setCurrentTab}
+        onSelectTab={(tab) => {
+          if (tab !== 'create-observation') {
+            setEditingObservation(null);
+          }
+          setCurrentTab(tab);
+        }}
         isOpen={sidebarOpen}
         onToggle={() => setSidebarOpen((prev) => !prev)}
       />
@@ -73,7 +134,12 @@ export const AppContent: React.FC = () => {
       >
         <Header
           currentTab={currentTab}
-          onNavigate={setCurrentTab}
+          onNavigate={(tab) => {
+            if (tab !== 'create-observation') {
+              setEditingObservation(null);
+            }
+            setCurrentTab(tab);
+          }}
           onToggleSidebar={() => setSidebarOpen((prev) => !prev)}
         />
 

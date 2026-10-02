@@ -1,10 +1,32 @@
-export type RoleType = 'EDUCATION_MANAGER' | 'HEAD_OF_TRACK' | 'QA_TEAM' | 'INSTRUCTOR';
+export type RoleType = 'EDUCATION_MANAGER' | 'HEAD_OF_TRACK' | 'QA_TEAM' | 'INSTRUCTOR' | 'OBSERVER';
 
 export type ObservationType = 'TECHNICAL' | 'NON_TECHNICAL';
 
 export type ObservationStatus = 'DRAFT' | 'SUBMITTED' | 'REVIEWED' | 'ARCHIVED';
 
 export type InstructorStatus = 'ACTIVE' | 'ON_LEAVE' | 'PROBATION' | 'INACTIVE';
+
+export type InstructorTier = 'A+' | 'A' | 'B+' | 'B';
+
+export function getTierFromScore(score: number): InstructorTier {
+  if (score >= 90) return 'A+';
+  if (score >= 80) return 'A';
+  if (score >= 70) return 'B+';
+  return 'B';
+}
+
+export function getTierBadgeClass(tier: InstructorTier): string {
+  switch (tier) {
+    case 'A+':
+      return 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800';
+    case 'A':
+      return 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950/70 dark:text-indigo-300 border-indigo-300 dark:border-indigo-800';
+    case 'B+':
+      return 'bg-amber-100 text-amber-800 dark:bg-amber-950/70 dark:text-amber-300 border-amber-300 dark:border-amber-800';
+    case 'B':
+      return 'bg-rose-100 text-rose-800 dark:bg-rose-950/70 dark:text-rose-300 border-rose-300 dark:border-rose-800';
+  }
+}
 
 export interface User {
   id: string;
@@ -44,6 +66,7 @@ export interface Instructor {
   averageScore: number;
   totalObserved: number;
   lastObservedAt?: string;
+  tier?: InstructorTier;
   createdAt: string;
   updatedAt: string;
 }
@@ -70,6 +93,7 @@ export interface ObservationCriterion {
   weightPercentage: number;
   orderIndex: number;
   isActive: boolean;
+  category?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -124,6 +148,15 @@ export interface ObservationFeedback {
   updatedAt: string;
 }
 
+export interface ActionPlanItem {
+  id: string;
+  objective: string;
+  actionSteps: string;
+  deadline: string;
+  assignedTo: string;
+  status: 'PENDING' | 'IN_PROGRESS' | 'COMPLETED';
+}
+
 export interface Observation {
   id: string;
   observationCode: string;
@@ -144,8 +177,10 @@ export interface Observation {
   weightedScore: number;
   percentageScore: number;
   grade?: string;
+  tier?: InstructorTier;
   scores?: ObservationScore[];
   feedback?: ObservationFeedback;
+  actionPlan?: ActionPlanItem[];
   createdAt: string;
   updatedAt: string;
 }
@@ -174,6 +209,117 @@ export interface AuditLog {
   createdAt: string;
 }
 
+// KPI Management
+export interface KpiDefinition {
+  id: string;
+  code: string;
+  name: string;
+  category: 'PEDAGOGICAL' | 'TECHNICAL' | 'STUDENT_SUCCESS' | 'DELIVERY';
+  weight: number; // Percentage, e.g. 25
+  targetValue: number; // e.g. 85
+  unit: string; // e.g. '%', 'pts', 'hrs'
+  description: string;
+}
+
+export interface KpiScorecard {
+  instructorId: string;
+  instructorName: string;
+  trackName: string;
+  period: string; // e.g. 'Oct 2026'
+  compositeScore: number; // 0-100
+  tier: InstructorTier;
+  kpiScores: {
+    kpiId: string;
+    kpiName: string;
+    weight: number;
+    target: number;
+    actual: number;
+    achieved: boolean;
+  }[];
+}
+
+export interface KpiMonthlyHistory {
+  month: string;
+  averageKpi: number;
+  targetKpi: number;
+  aPlusCount: number;
+  aCount: number;
+  bPlusCount: number;
+  bCount: number;
+}
+
+// Coaching & Development
+export interface CoachingActionItem {
+  id: string;
+  task: string;
+  targetDate: string;
+  isCompleted: boolean;
+}
+
+export interface CoachingSession {
+  id: string;
+  instructorId: string;
+  instructorName: string;
+  coachId: string;
+  coachName: string;
+  trackId: string;
+  trackName: string;
+  date: string;
+  focusArea: 'PEDAGOGY' | 'TECH_MASTERY' | 'STUDENT_ENGAGEMENT' | 'TIME_MANAGEMENT' | 'CURRICULUM';
+  objectives: string;
+  coachNotes: string;
+  actionItems: CoachingActionItem[];
+  status: 'SCHEDULED' | 'IN_PROGRESS' | 'COMPLETED' | 'FOLLOW_UP_REQUIRED';
+  followUpDate?: string;
+  createdAt: string;
+}
+
+export interface InstructorImprovementPlan {
+  id: string;
+  instructorId: string;
+  instructorName: string;
+  trackId: string;
+  title: string;
+  reason: string;
+  startDate: string;
+  targetReviewDate: string;
+  status: 'ACTIVE' | 'UNDER_REVIEW' | 'SUCCESSFUL' | 'EXTENDED';
+  milestones: {
+    title: string;
+    deadline: string;
+    status: 'PENDING' | 'IN_PROGRESS' | 'DONE';
+  }[];
+  mentorName: string;
+}
+
+// Feedback & Quality
+export interface StudentFeedbackRecord {
+  id: string;
+  instructorId: string;
+  instructorName: string;
+  trackId: string;
+  trackName: string;
+  groupId: string;
+  groupName: string;
+  submissionDate: string;
+  overallRating: number; // 1 to 5
+  clarityRating: number;
+  engagementRating: number;
+  supportRating: number;
+  pacingRating: number;
+  studentComments: string;
+  sentiment: 'POSITIVE' | 'NEUTRAL' | 'NEGATIVE';
+}
+
+export interface QualityMetric {
+  id: string;
+  title: string;
+  value: number;
+  target: number;
+  change: string;
+  status: 'OPTIMAL' | 'ACCEPTABLE' | 'NEEDS_ATTENTION';
+}
+
 export interface DashboardAnalytics {
   statsCards: {
     observationMetrics: {
@@ -189,6 +335,12 @@ export interface DashboardAnalytics {
       averageInstructorScore: number;
       highestInstructorScore: number;
       lowestInstructorScore: number;
+    };
+    tierDistribution: {
+      aPlus: number;
+      a: number;
+      bPlus: number;
+      b: number;
     };
   };
   trackAnalytics: {
@@ -224,6 +376,25 @@ export interface DashboardAnalytics {
     technical: number;
     nonTechnical: number;
     totalCount: number;
+    averageScore: number;
+  }[];
+  topInstructors: {
+    id: string;
+    name: string;
+    avatar?: string;
+    trackName: string;
+    averageScore: number;
+    tier: InstructorTier;
+    totalObserved: number;
+  }[];
+  improvementInstructors: {
+    id: string;
+    name: string;
+    avatar?: string;
+    trackName: string;
+    averageScore: number;
+    tier: InstructorTier;
+    recommendedCoaching: string;
   }[];
   heatmap: {
     track: string;
