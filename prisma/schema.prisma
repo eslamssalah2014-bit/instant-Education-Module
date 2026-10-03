@@ -1,6 +1,3 @@
-// This is your Prisma schema file for Instant ERP - Education Management Module
-// Compatible with PostgreSQL in production, with full indexes and relational constraints.
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -9,6 +6,246 @@ datasource db {
   provider  = "postgresql"
   url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id                String                       @id @default(uuid())
+  email             String                       @unique
+  name              String
+  avatar            String?
+  roleType          RoleType                     @default(INSTRUCTOR)
+  phone             String?
+  department        String?                      @default("Education")
+  createdAt         DateTime                     @default(now())
+  updatedAt         DateTime                     @updatedAt
+  roleId            String?
+  auditLogs         AuditLog[]
+  instructorProfile Instructor?                  @relation("UserInstructor")
+  notifications     Notification[]
+  observedSessions  Observation[]                @relation("ObserverUser")
+  templateVersions  ObservationTemplateVersion[] @relation("VersionCreator")
+  managedTrack      Track?                       @relation("TrackHead")
+  role              Role?                        @relation(fields: [roleId], references: [id])
+
+  @@index([roleType])
+  @@index([email])
+}
+
+model Role {
+  id          String   @id @default(uuid())
+  name        RoleType @unique
+  displayName String
+  description String
+  permissions Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  users       User[]
+}
+
+model Track {
+  id           String        @id @default(uuid())
+  name         String        @unique
+  code         String        @unique
+  description  String?
+  color        String        @default("#4f46e5")
+  headUserId   String?       @unique
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  groups       Group[]
+  instructors  Instructor[]
+  observations Observation[]
+  headUser     User?         @relation("TrackHead", fields: [headUserId], references: [id])
+
+  @@index([name])
+}
+
+model Instructor {
+  id             String           @id @default(uuid())
+  userId         String           @unique
+  employeeId     String           @unique
+  trackId        String
+  title          String
+  specialization String
+  hireDate       DateTime         @default(now())
+  status         InstructorStatus @default(ACTIVE)
+  averageScore   Float            @default(0.0)
+  totalObserved  Int              @default(0)
+  lastObservedAt DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  groups         Group[]
+  track          Track            @relation(fields: [trackId], references: [id])
+  user           User             @relation("UserInstructor", fields: [userId], references: [id], onDelete: Cascade)
+  observations   Observation[]
+
+  @@index([trackId])
+  @@index([status])
+}
+
+model Group {
+  id           String        @id @default(uuid())
+  name         String
+  code         String        @unique
+  trackId      String
+  instructorId String
+  term         String        @default("Q4 2026")
+  studentCount Int           @default(24)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  instructor   Instructor    @relation(fields: [instructorId], references: [id])
+  track        Track         @relation(fields: [trackId], references: [id])
+  observations Observation[]
+
+  @@index([trackId])
+  @@index([instructorId])
+}
+
+model ObservationTemplate {
+  id               String                       @id @default(uuid())
+  code             String                       @unique
+  name             String
+  type             ObservationType
+  description      String
+  isActive         Boolean                      @default(true)
+  isArchived       Boolean                      @default(false)
+  currentVersionId String?
+  createdAt        DateTime                     @default(now())
+  updatedAt        DateTime                     @updatedAt
+  versions         ObservationTemplateVersion[]
+
+  @@index([type])
+  @@index([isActive])
+}
+
+model ObservationTemplateVersion {
+  id            String                 @id @default(uuid())
+  templateId    String
+  versionNumber String
+  changeLog     String
+  createdById   String
+  isActive      Boolean                @default(true)
+  createdAt     DateTime               @default(now())
+  observations  Observation[]
+  criteria      ObservationCriterion[]
+  createdBy     User                   @relation("VersionCreator", fields: [createdById], references: [id])
+  template      ObservationTemplate    @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@unique([templateId, versionNumber])
+  @@index([templateId])
+  @@index([isActive])
+}
+
+model ObservationCriterion {
+  id                String                     @id @default(uuid())
+  templateVersionId String
+  name              String
+  description       String
+  weightPercentage  Float
+  orderIndex        Int                        @default(0)
+  isActive          Boolean                    @default(true)
+  createdAt         DateTime                   @default(now())
+  updatedAt         DateTime                   @updatedAt
+  templateVersion   ObservationTemplateVersion @relation(fields: [templateVersionId], references: [id], onDelete: Cascade)
+  scores            ObservationScore[]
+
+  @@index([templateVersionId])
+  @@index([orderIndex])
+}
+
+model Observation {
+  id                String                     @id @default(uuid())
+  observationCode   String                     @unique
+  templateVersionId String
+  type              ObservationType
+  instructorId      String
+  observerId        String
+  groupId           String
+  trackId           String
+  observationDate   DateTime                   @default(now())
+  status            ObservationStatus          @default(SUBMITTED)
+  totalScore        Float                      @default(0.0)
+  weightedScore     Float                      @default(0.0)
+  percentageScore   Float                      @default(0.0)
+  grade             String?
+  createdAt         DateTime                   @default(now())
+  updatedAt         DateTime                   @updatedAt
+  group             Group                      @relation(fields: [groupId], references: [id])
+  instructor        Instructor                 @relation(fields: [instructorId], references: [id])
+  observer          User                       @relation("ObserverUser", fields: [observerId], references: [id])
+  templateVersion   ObservationTemplateVersion @relation(fields: [templateVersionId], references: [id])
+  track             Track                      @relation(fields: [trackId], references: [id])
+  feedback          ObservationFeedback?
+  scores            ObservationScore[]
+
+  @@index([instructorId])
+  @@index([observerId])
+  @@index([trackId])
+  @@index([groupId])
+  @@index([observationDate])
+  @@index([status])
+}
+
+model ObservationScore {
+  id            String               @id @default(uuid())
+  observationId String
+  criterionId   String
+  criterionName String
+  score         Float
+  weight        Float
+  weightedScore Float
+  feedback      String
+  createdAt     DateTime             @default(now())
+  criterion     ObservationCriterion @relation(fields: [criterionId], references: [id])
+  observation   Observation          @relation(fields: [observationId], references: [id], onDelete: Cascade)
+
+  @@unique([observationId, criterionId])
+  @@index([observationId])
+  @@index([criterionId])
+}
+
+model ObservationFeedback {
+  id                  String      @id @default(uuid())
+  observationId       String      @unique
+  generalComments     String
+  strengths           String
+  areasForImprovement String
+  recommendations     String
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+  observation         Observation @relation(fields: [observationId], references: [id], onDelete: Cascade)
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  title     String
+  message   String
+  type      String   @default("OBSERVATION_SUBMITTED")
+  isRead    Boolean  @default(false)
+  link      String?
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@index([createdAt])
+}
+
+model AuditLog {
+  id        String    @id @default(uuid())
+  userId    String?
+  userRole  RoleType?
+  action    String
+  entity    String
+  entityId  String?
+  details   Json?
+  ipAddress String?   @default("127.0.0.1")
+  userAgent String?
+  createdAt DateTime  @default(now())
+  user      User?     @relation(fields: [userId], references: [id])
+
+  @@index([action])
+  @@index([entity, entityId])
+  @@index([createdAt])
 }
 
 enum RoleType {
@@ -35,250 +272,4 @@ enum InstructorStatus {
   ON_LEAVE
   PROBATION
   INACTIVE
-}
-
-model User {
-  id              String         @id @default(uuid())
-  email           String         @unique
-  name            String
-  avatar          String?
-  roleType        RoleType       @default(INSTRUCTOR)
-  phone           String?
-  department      String?        @default("Education")
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
-
-  // Relationships
-  role            Role?          @relation(fields: [roleId], references: [id])
-  roleId          String?
-  managedTrack    Track?         @relation("TrackHead")
-  instructorProfile Instructor?  @relation("UserInstructor")
-  observedSessions Observation[] @relation("ObserverUser")
-  templateVersions ObservationTemplateVersion[] @relation("VersionCreator")
-  notifications   Notification[]
-  auditLogs       AuditLog[]
-
-  @@index([roleType])
-  @@index([email])
-}
-
-model Role {
-  id          String    @id @default(uuid())
-  name        RoleType  @unique
-  displayName String
-  description String
-  permissions Json      // Array of permission keys: ["observations:read", "templates:manage", etc.]
-  users       User[]
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-}
-
-model Track {
-  id            String         @id @default(uuid())
-  name          String         @unique // e.g. "Frontend", "Backend", "Mobile", "AI & Data Analysis", "Cybersecurity", "UI/UX"
-  code          String         @unique // e.g. "TRK-FE", "TRK-BE"
-  description   String?
-  color         String         @default("#4f46e5")
-  headUserId    String?        @unique
-  headUser      User?          @relation("TrackHead", fields: [headUserId], references: [id])
-  instructors   Instructor[]
-  groups        Group[]
-  observations  Observation[]
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
-
-  @@index([name])
-}
-
-model Instructor {
-  id              String            @id @default(uuid())
-  userId          String            @unique
-  user            User              @relation("UserInstructor", fields: [userId], references: [id], onDelete: Cascade)
-  employeeId      String            @unique
-  trackId         String
-  track           Track             @relation(fields: [trackId], references: [id])
-  title           String            // e.g. "Senior Frontend Specialist", "Staff Backend Architect"
-  specialization  String            // e.g. "React, Next.js, Web Performance"
-  hireDate        DateTime          @default(now())
-  status          InstructorStatus  @default(ACTIVE)
-  averageScore    Float             @default(0.0)
-  totalObserved   Int               @default(0)
-  lastObservedAt  DateTime?
-
-  groups          Group[]
-  observations    Observation[]
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
-
-  @@index([trackId])
-  @@index([status])
-}
-
-model Group {
-  id            String         @id @default(uuid())
-  name          String         // e.g. "Frontend Cohort 14 - Group A"
-  code          String         @unique // e.g. "GRP-FE-14A"
-  trackId       String
-  track         Track          @relation(fields: [trackId], references: [id])
-  instructorId  String
-  instructor    Instructor     @relation(fields: [instructorId], references: [id])
-  term          String         @default("Q4 2026")
-  studentCount  Int            @default(24)
-  observations  Observation[]
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
-
-  @@index([trackId])
-  @@index([instructorId])
-}
-
-model ObservationTemplate {
-  id              String                      @id @default(uuid())
-  code            String                      @unique // e.g. "TMPL-TECH-EVAL", "TMPL-NONTECH-EVAL"
-  name            String                      // e.g. "Technical Observation Template"
-  type            ObservationType
-  description     String
-  isActive        Boolean                     @default(true)
-  isArchived      Boolean                     @default(false)
-  currentVersionId String?
-  versions        ObservationTemplateVersion[]
-  createdAt       DateTime                    @default(now())
-  updatedAt       DateTime                    @updatedAt
-
-  @@index([type])
-  @@index([isActive])
-}
-
-model ObservationTemplateVersion {
-  id              String               @id @default(uuid())
-  templateId      String
-  template        ObservationTemplate  @relation(fields: [templateId], references: [id], onDelete: Cascade)
-  versionNumber   String               // e.g. "v1.0", "v1.1", "v2.0"
-  changeLog       String
-  createdById     String
-  createdBy       User                 @relation("VersionCreator", fields: [createdById], references: [id])
-  isActive        Boolean              @default(true)
-  criteria        ObservationCriterion[]
-  observations    Observation[]
-  createdAt       DateTime             @default(now())
-
-  @@unique([templateId, versionNumber])
-  @@index([templateId])
-  @@index([isActive])
-}
-
-model ObservationCriterion {
-  id                String                     @id @default(uuid())
-  templateVersionId String
-  templateVersion   ObservationTemplateVersion @relation(fields: [templateVersionId], references: [id], onDelete: Cascade)
-  name              String                     // e.g. "Technical Knowledge", "Classroom Management"
-  description       String
-  weightPercentage  Float                      // e.g. 25.0 (percentage must total 100% per template version)
-  orderIndex        Int                        @default(0)
-  isActive          Boolean                    @default(true)
-  scores            ObservationScore[]
-  createdAt         DateTime                   @default(now())
-  updatedAt         DateTime                   @updatedAt
-
-  @@index([templateVersionId])
-  @@index([orderIndex])
-}
-
-model Observation {
-  id                  String                     @id @default(uuid())
-  observationCode     String                     @unique // e.g. "OBS-2026-0042"
-  templateVersionId   String
-  templateVersion     ObservationTemplateVersion @relation(fields: [templateVersionId], references: [id])
-  type                ObservationType
-  instructorId        String
-  instructor          Instructor                 @relation(fields: [instructorId], references: [id])
-  observerId          String
-  observer            User                       @relation("ObserverUser", fields: [observerId], references: [id])
-  groupId             String
-  group               Group                      @relation(fields: [groupId], references: [id])
-  trackId             String
-  track               Track                      @relation(fields: [trackId], references: [id])
-  observationDate     DateTime                   @default(now())
-  status              ObservationStatus          @default(SUBMITTED)
-  
-  // Numerical Metrics (calculated upon submission)
-  totalScore          Float                      @default(0.0) // Raw average or sum score
-  weightedScore       Float                      @default(0.0) // 0-100% or 0-10 weighted
-  percentageScore     Float                      @default(0.0) // 0 - 100%
-  grade               String?                    // e.g. "Excellent", "Good", "Needs Improvement"
-  
-  scores              ObservationScore[]
-  feedback            ObservationFeedback?
-  createdAt           DateTime                   @default(now())
-  updatedAt           DateTime                   @updatedAt
-
-  @@index([instructorId])
-  @@index([observerId])
-  @@index([trackId])
-  @@index([groupId])
-  @@index([observationDate])
-  @@index([status])
-}
-
-model ObservationScore {
-  id              String               @id @default(uuid())
-  observationId   String
-  observation     Observation          @relation(fields: [observationId], references: [id], onDelete: Cascade)
-  criterionId     String
-  criterion       ObservationCriterion @relation(fields: [criterionId], references: [id])
-  criterionName   String               // Denormalized snapshot
-  score           Float                // 1.0 to 10.0
-  weight          Float                // Denormalized snapshot weight
-  weightedScore   Float                // (score / 10) * weight
-  feedback        String
-  createdAt       DateTime             @default(now())
-
-  @@unique([observationId, criterionId])
-  @@index([observationId])
-  @@index([criterionId])
-}
-
-model ObservationFeedback {
-  id                  String       @id @default(uuid())
-  observationId       String       @unique
-  observation         Observation  @relation(fields: [observationId], references: [id], onDelete: Cascade)
-  generalComments     String
-  strengths           String
-  areasForImprovement String
-  recommendations     String
-  createdAt           DateTime     @default(now())
-  updatedAt           DateTime     @updatedAt
-}
-
-model Notification {
-  id          String    @id @default(uuid())
-  userId      String
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  title       String
-  message     String
-  type        String    @default("OBSERVATION_SUBMITTED") // e.g. "OBSERVATION_SUBMITTED", "FEEDBACK_READY", "REPORT_READY"
-  isRead      Boolean   @default(false)
-  link        String?
-  createdAt   DateTime  @default(now())
-
-  @@index([userId, isRead])
-  @@index([createdAt])
-}
-
-model AuditLog {
-  id          String    @id @default(uuid())
-  userId      String?
-  user        User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
-  userRole    RoleType?
-  action      String    // e.g. "OBSERVATION_CREATED", "TEMPLATE_VERSION_BUMPED", "EXPORT_REPORT"
-  entity      String    // e.g. "Observation", "ObservationTemplate", "Report"
-  entityId    String?
-  details     Json?     // Payload snapshot, diff, parameters
-  ipAddress   String?   @default("127.0.0.1")
-  userAgent   String?
-  createdAt   DateTime  @default(now())
-
-  @@index([action])
-  @@index([entity, entityId])
-  @@index([createdAt])
 }

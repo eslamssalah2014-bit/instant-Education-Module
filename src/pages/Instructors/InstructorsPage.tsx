@@ -266,6 +266,15 @@ export const InstructorsPage: React.FC<{
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800 text-sm">
+              {instructors.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="px-6 py-12 text-center text-slate-500 dark:text-slate-400">
+                    <GraduationCap className="mx-auto h-10 w-10 text-slate-400 mb-2 opacity-50" />
+                    <p className="font-medium text-base text-slate-700 dark:text-slate-300">No instructors found</p>
+                    <p className="text-xs text-slate-400 mt-1">All instructor records have been deleted in this clean environment.</p>
+                  </td>
+                </tr>
+              )}
               {instructors.map((ins) => {
                 const tier = ins.tier || 'A';
                 return (

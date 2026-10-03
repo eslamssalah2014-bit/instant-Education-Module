@@ -181,6 +181,15 @@ export const KpiManagementPage: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+              {kpis.length === 0 && (
+                <tr>
+                  <td colSpan={isEducationManager ? 6 : 5} className="px-6 py-12 text-center text-slate-500 dark:text-slate-400">
+                    <Target className="mx-auto h-10 w-10 text-slate-400 mb-2 opacity-50" />
+                    <p className="font-semibold text-sm text-slate-700 dark:text-slate-300">No KPI definitions configured</p>
+                    <p className="text-xs text-slate-400 mt-1">All KPI benchmarks have been reset in this clean environment.</p>
+                  </td>
+                </tr>
+              )}
               {kpis.map((k) => (
                 <tr key={k.id} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/30">
                   <td className="px-6 py-4 font-semibold text-slate-900 dark:text-white">
@@ -227,40 +236,46 @@ export const KpiManagementPage: React.FC = () => {
           Aggregated faculty performance trajectory vs institutional 85% benchmark.
         </p>
 
-        <div className="h-72 w-full">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={history}>
-              <CartesianGrid strokeDasharray="3 3" opacity={0.15} />
-              <XAxis dataKey="month" stroke="#94a3b8" fontSize={12} />
-              <YAxis domain={[75, 100]} stroke="#94a3b8" fontSize={12} />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: '#0f172a',
-                  border: 'none',
-                  borderRadius: '0.75rem',
-                  color: '#fff',
-                }}
-              />
-              <Legend />
-              <Line
-                type="monotone"
-                dataKey="averageKpi"
-                name="Average KPI Score"
-                stroke="#6366f1"
-                strokeWidth={3}
-                dot={{ r: 5 }}
-              />
-              <Line
-                type="monotone"
-                dataKey="targetKpi"
-                name="Target Benchmark (85%)"
-                stroke="#10b981"
-                strokeWidth={2}
-                strokeDasharray="5 5"
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
+        {history.length === 0 ? (
+          <div className="h-48 w-full flex flex-col items-center justify-center text-xs text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
+            No historical KPI composite data available
+          </div>
+        ) : (
+          <div className="h-72 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={history}>
+                <CartesianGrid strokeDasharray="3 3" opacity={0.15} />
+                <XAxis dataKey="month" stroke="#94a3b8" fontSize={12} />
+                <YAxis domain={[75, 100]} stroke="#94a3b8" fontSize={12} />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: '#0f172a',
+                    border: 'none',
+                    borderRadius: '0.75rem',
+                    color: '#fff',
+                  }}
+                />
+                <Legend />
+                <Line
+                  type="monotone"
+                  dataKey="averageKpi"
+                  name="Average KPI Score"
+                  stroke="#6366f1"
+                  strokeWidth={3}
+                  dot={{ r: 5 }}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="targetKpi"
+                  name="Target Benchmark (85%)"
+                  stroke="#10b981"
+                  strokeWidth={2}
+                  strokeDasharray="5 5"
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        )}
       </div>
 
       {/* Faculty Scorecards Table */}
@@ -283,6 +298,15 @@ export const KpiManagementPage: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+              {scorecards.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="px-6 py-12 text-center text-slate-500 dark:text-slate-400">
+                    <Award className="mx-auto h-10 w-10 text-slate-400 mb-2 opacity-50" />
+                    <p className="font-semibold text-sm text-slate-700 dark:text-slate-300">No faculty scorecards available</p>
+                    <p className="text-xs text-slate-400 mt-1">Scorecards will be calculated once faculty observations and KPI metrics are recorded.</p>
+                  </td>
+                </tr>
+              )}
               {scorecards.map((sc) => {
                 const metCount = sc.kpiScores.filter((k) => k.achieved).length;
                 return (

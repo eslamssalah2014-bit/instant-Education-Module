@@ -11,9 +11,12 @@ import {
   Award,
   Layers,
   Sparkles,
+  RotateCcw,
+  AlertTriangle,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
+import { useFeedback } from '../../context/FeedbackContext';
 import { api } from '../../services/api';
 import { Notification } from '../../types';
 
@@ -26,10 +29,13 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({ onToggleSidebar, currentTab, onNavigate }) => {
   const { currentUser, allUsers, switchUser, canCreateObservation } = useAuth();
   const { theme, toggleTheme } = useTheme();
+  const { showSuccess, showError } = useFeedback();
 
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
   const [showRoleSwitcher, setShowRoleSwitcher] = useState(false);
+  const [showResetModal, setShowResetModal] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
 
   const notifRef = useRef<HTMLDivElement>(null);
   const roleRef = useRef<HTMLDivElement>(null);
@@ -134,6 +140,16 @@ export const Header: React.FC<HeaderProps> = ({ onToggleSidebar, currentTab, onN
             <span>New Observation</span>
           </button>
         )}
+
+        {/* Full System Data Reset Button */}
+        <button
+          onClick={() => setShowResetModal(true)}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-semibold text-rose-700 shadow-sm hover:bg-rose-100 hover:text-rose-800 transition active:scale-95 dark:border-rose-900/60 dark:bg-rose-950/40 dark:text-rose-300 dark:hover:bg-rose-950/60"
+          title="Full System Data Reset (Purge all business & test records)"
+        >
+          <RotateCcw className="h-3.5 w-3.5" />
+          <span className="hidden lg:inline">Reset System</span>
+        </button>
 
         {/* Persona / RBAC Role Switcher */}
         <div className="relative" ref={roleRef}>
@@ -294,6 +310,83 @@ export const Header: React.FC<HeaderProps> = ({ onToggleSidebar, currentTab, onN
           {theme === 'light' ? <Moon className="h-5 w-5" /> : <Sun className="h-5 w-5" />}
         </button>
       </div>
+
+      {/* Full Reset Confirmation Modal */}
+      {showResetModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-md rounded-2xl border border-rose-200 bg-white p-6 shadow-2xl dark:border-rose-900/60 dark:bg-slate-900">
+            <div className="flex items-center gap-3 text-rose-600 dark:text-rose-400">
+              <div className="rounded-xl bg-rose-100 p-2.5 dark:bg-rose-950/60">
+                <AlertTriangle className="h-6 w-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                  Full System Data Reset
+                </h3>
+                <p className="text-xs text-rose-600 dark:text-rose-400 font-medium">
+                  Permanent clean installation wipe
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4 space-y-2 text-xs text-slate-600 dark:text-slate-300">
+              <p>This action will permanently purge all business and test records from all application tables:</p>
+              <ul className="list-disc pl-5 space-y-1 text-slate-500 dark:text-slate-400">
+                <li>All Instructors, Groups, and Tracks</li>
+                <li>All Observations, Scores, and Feedbacks</li>
+                <li>All Coaching sessions, Action plans, and PIPs</li>
+                <li>All Student feedback, KPIs, and Quality metrics</li>
+                <li>All Audit logs and Notifications</li>
+              </ul>
+              <div className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-800/60 text-[11px] text-slate-500">
+                <strong>Kept intact:</strong> Database schema, tables, columns, relations, 4 system roles, and 1 required admin account (Dr. Sarah Jenkins).
+              </div>
+            </div>
+
+            <div className="mt-6 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowResetModal(false)}
+                disabled={isResetting}
+                className="rounded-lg border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isResetting}
+                onClick={async () => {
+                  setIsResetting(true);
+                  try {
+                    await api.resetSystemData();
+                    showSuccess('Full data reset completed. All business tables cleared to 0 rows.');
+                    setShowResetModal(false);
+                    setTimeout(() => {
+                      window.location.reload();
+                    }, 500);
+                  } catch (err: any) {
+                    showError(err.message || 'Failed to reset system data');
+                    setIsResetting(false);
+                  }
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-rose-700 transition"
+              >
+                {isResetting ? (
+                  <>
+                    <RotateCcw className="h-3.5 w-3.5 animate-spin" />
+                    Resetting...
+                  </>
+                ) : (
+                  <>
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    Confirm Full Reset
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </header>
   );
 };

@@ -91,10 +91,10 @@ export const DashboardPage: React.FC<{
   } = analytics;
 
   const tierPieData = [
-    { name: 'Tier A+ (Elite)', value: statsCards.tierDistribution?.aPlus || 2, color: '#10b981' },
-    { name: 'Tier A (Accomplished)', value: statsCards.tierDistribution?.a || 2, color: '#6366f1' },
-    { name: 'Tier B+ (Proficient)', value: statsCards.tierDistribution?.bPlus || 2, color: '#f59e0b' },
-    { name: 'Tier B (Under Review)', value: statsCards.tierDistribution?.b || 1, color: '#f43f5e' },
+    { name: 'Tier A+ (Elite)', value: statsCards.tierDistribution?.aPlus ?? 0, color: '#10b981' },
+    { name: 'Tier A (Accomplished)', value: statsCards.tierDistribution?.a ?? 0, color: '#6366f1' },
+    { name: 'Tier B+ (Proficient)', value: statsCards.tierDistribution?.bPlus ?? 0, color: '#f59e0b' },
+    { name: 'Tier B (Under Review)', value: statsCards.tierDistribution?.b ?? 0, color: '#f43f5e' },
   ];
 
   return (
@@ -215,7 +215,7 @@ export const DashboardPage: React.FC<{
           </div>
           <div className="mt-3 flex items-baseline gap-2">
             <span className="text-3xl font-extrabold text-slate-900 dark:text-white font-mono">
-              {statsCards.tierDistribution?.b || 1}
+              {statsCards.tierDistribution?.b ?? 0}
             </span>
             <span className="text-xs text-amber-600 font-medium">Under active PIP</span>
           </div>
@@ -350,6 +350,11 @@ export const DashboardPage: React.FC<{
           </div>
 
           <div className="space-y-3">
+            {topInstructors.length === 0 && (
+              <div className="p-6 text-center text-xs text-slate-400 rounded-xl border border-dashed border-slate-200 dark:border-slate-800">
+                No faculty evaluations recorded yet
+              </div>
+            )}
             {topInstructors.map((ins, i) => (
               <div
                 key={ins.id}
@@ -401,6 +406,11 @@ export const DashboardPage: React.FC<{
           </div>
 
           <div className="space-y-3">
+            {improvementInstructors.length === 0 && (
+              <div className="p-6 text-center text-xs text-slate-400 rounded-xl border border-dashed border-slate-200 dark:border-slate-800">
+                No faculty members currently require coaching support
+              </div>
+            )}
             {improvementInstructors.map((ins) => (
               <div
                 key={ins.id}
@@ -442,6 +452,11 @@ export const DashboardPage: React.FC<{
         </h3>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pt-2">
+          {trackAnalytics.length === 0 && (
+            <div className="col-span-full p-8 text-center text-xs text-slate-400 rounded-xl border border-dashed border-slate-200 dark:border-slate-800">
+              No academic tracks configured yet
+            </div>
+          )}
           {trackAnalytics.map((t) => (
             <div
               key={t.trackId}

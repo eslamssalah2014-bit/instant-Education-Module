@@ -49,7 +49,7 @@ export const InstructorPortalPage: React.FC = () => {
     } catch (err: any) {
       console.warn('Could not load instructor profile for current user:', err);
       setErrorMsg(
-        'Current user is not assigned an instructor profile. Please switch to an Instructor persona (e.g. David Miller, Amira Hassan, or Omar Farooq) in the top right to test the Instructor Portal.'
+        'Current user is not assigned an instructor profile. In this clean environment, register a new faculty member from the Instructors page or switch to an instructor account.'
       );
     } finally {
       setIsLoading(false);

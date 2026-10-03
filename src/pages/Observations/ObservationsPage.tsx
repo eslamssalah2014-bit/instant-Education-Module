@@ -18,6 +18,7 @@ import {
   Award,
   Archive,
   Trash2,
+  ClipboardCheck,
 } from 'lucide-react';
 import { api } from '../../services/api';
 import {
@@ -377,6 +378,15 @@ export const ObservationsPage: React.FC<{
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800 text-sm">
+              {observations.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="px-6 py-12 text-center text-slate-500 dark:text-slate-400">
+                    <ClipboardCheck className="mx-auto h-10 w-10 text-slate-400 mb-2 opacity-50" />
+                    <p className="font-medium text-base text-slate-700 dark:text-slate-300">No observations found</p>
+                    <p className="text-xs text-slate-400 mt-1">All observation records have been purged. Conduct a new evaluation to start recording data.</p>
+                  </td>
+                </tr>
+              )}
               {observations.map((obs) => {
                 const tier = obs.tier || 'A';
                 return (

@@ -103,15 +103,7 @@ export const CreateObservationPage: React.FC<{
           deadline: ap.deadline,
           assignedTo: ap.assignedTo,
         }))
-      : [
-          {
-            id: '1',
-            objective: 'Implement recommended code review standards',
-            actionSteps: 'Provide structured PR feedback checklists during group sprint reviews.',
-            deadline: new Date(Date.now() + 14 * 86400000).toISOString().split('T')[0],
-            assignedTo: 'Lead Instructor',
-          },
-        ]
+      : []
   );
 
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -166,19 +158,24 @@ export const CreateObservationPage: React.FC<{
     const loadTemplate = async () => {
       try {
         const tmpl = await api.getTemplatePreview(observationType);
-        setActiveTemplateVersion(tmpl.currentVersion);
+        if (tmpl && tmpl.currentVersion) {
+          setActiveTemplateVersion(tmpl.currentVersion);
 
-        // Pre-fill score entries
-        const initialMap: Record<string, ScoreEntry> = {};
-        tmpl.currentVersion.criteria.forEach((crit: ObservationCriterion) => {
-          const existing = editingObservation?.scores?.find((s) => s.criterionId === crit.id);
-          initialMap[crit.id] = {
-            criterionId: crit.id,
-            score: existing ? existing.score : 8,
-            feedback: existing ? existing.feedback : '',
-          };
-        });
-        setCriteriaScores(initialMap);
+          // Pre-fill score entries
+          const initialMap: Record<string, ScoreEntry> = {};
+          (tmpl.currentVersion.criteria || []).forEach((crit: ObservationCriterion) => {
+            const existing = editingObservation?.scores?.find((s) => s.criterionId === crit.id);
+            initialMap[crit.id] = {
+              criterionId: crit.id,
+              score: existing ? existing.score : 8,
+              feedback: existing ? existing.feedback : '',
+            };
+          });
+          setCriteriaScores(initialMap);
+        } else {
+          setActiveTemplateVersion(null);
+          setCriteriaScores({});
+        }
       } catch (err) {
         console.error('Failed to load template preview:', err);
       }
@@ -551,66 +548,74 @@ export const CreateObservationPage: React.FC<{
           </div>
 
           <div className="space-y-6">
-            {activeTemplateVersion?.criteria.map((crit, idx) => {
-              const currentScore = criteriaScores[crit.id]?.score ?? 8;
-              const currentFeedback = criteriaScores[crit.id]?.feedback ?? '';
+            {!activeTemplateVersion || !activeTemplateVersion.criteria || activeTemplateVersion.criteria.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-slate-500 dark:border-slate-800 dark:text-slate-400">
+                <Award className="h-8 w-8 mx-auto mb-2 text-slate-400" />
+                <p className="text-sm font-semibold">No Evaluation Criteria Configured</p>
+                <p className="text-xs text-slate-400 mt-1">Please create an observation template with criteria in Criteria Management to enable evaluation scoring.</p>
+              </div>
+            ) : (
+              activeTemplateVersion.criteria.map((crit, idx) => {
+                const currentScore = criteriaScores[crit.id]?.score ?? 8;
+                const currentFeedback = criteriaScores[crit.id]?.feedback ?? '';
 
-              return (
-                <div
-                  key={crit.id}
-                  className="rounded-xl border border-slate-150 bg-slate-50/50 p-5 dark:border-slate-800 dark:bg-slate-850/40 space-y-4 hover:border-indigo-200 transition-colors"
-                >
-                  <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-indigo-100 text-xs font-bold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
-                          {idx + 1}
-                        </span>
-                        <h3 className="font-bold text-slate-900 dark:text-white text-sm">
-                          {crit.name}
-                        </h3>
-                        <span className="rounded-md bg-indigo-50 px-2 py-0.5 text-[11px] font-bold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
-                          Weight: {crit.weightPercentage}%
+                return (
+                  <div
+                    key={crit.id}
+                    className="rounded-xl border border-slate-150 bg-slate-50/50 p-5 dark:border-slate-800 dark:bg-slate-850/40 space-y-4 hover:border-indigo-200 transition-colors"
+                  >
+                    <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-indigo-100 text-xs font-bold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
+                            {idx + 1}
+                          </span>
+                          <h3 className="font-bold text-slate-900 dark:text-white text-sm">
+                            {crit.name}
+                          </h3>
+                          <span className="rounded-md bg-indigo-50 px-2 py-0.5 text-[11px] font-bold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
+                            Weight: {crit.weightPercentage}%
+                          </span>
+                        </div>
+                        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400 pl-8 max-w-3xl">
+                          {crit.description}
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-3 shrink-0 pl-8 sm:pl-0">
+                        <span className="font-mono text-xl font-extrabold text-indigo-600 dark:text-indigo-400">
+                          {currentScore}/10
                         </span>
                       </div>
-                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400 pl-8 max-w-3xl">
-                        {crit.description}
-                      </p>
                     </div>
 
-                    <div className="flex items-center gap-3 shrink-0 pl-8 sm:pl-0">
-                      <span className="font-mono text-xl font-extrabold text-indigo-600 dark:text-indigo-400">
-                        {currentScore}/10
-                      </span>
-                    </div>
-                  </div>
+                    <div className="pl-8 space-y-3">
+                      {/* Range Slider */}
+                      <div className="flex items-center gap-4">
+                        <input
+                          type="range"
+                          min="1"
+                          max="10"
+                          step="0.5"
+                          value={currentScore}
+                          onChange={(e) => handleScoreChange(crit.id, parseFloat(e.target.value))}
+                          className="h-2 w-full cursor-pointer appearance-none rounded-lg bg-slate-200 accent-indigo-600 dark:bg-slate-700"
+                        />
+                      </div>
 
-                  <div className="pl-8 space-y-3">
-                    {/* Range Slider */}
-                    <div className="flex items-center gap-4">
+                      {/* Criteria Specific Feedback */}
                       <input
-                        type="range"
-                        min="1"
-                        max="10"
-                        step="0.5"
-                        value={currentScore}
-                        onChange={(e) => handleScoreChange(crit.id, parseFloat(e.target.value))}
-                        className="h-2 w-full cursor-pointer appearance-none rounded-lg bg-slate-200 accent-indigo-600 dark:bg-slate-700"
+                        type="text"
+                        placeholder={`Observations or evidence for ${crit.name}...`}
+                        value={currentFeedback}
+                        onChange={(e) => handleFeedbackChange(crit.id, e.target.value)}
+                        className="w-full rounded-lg border border-slate-200 bg-white p-2.5 text-xs text-slate-800 placeholder-slate-400 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                       />
                     </div>
-
-                    {/* Criteria Specific Feedback */}
-                    <input
-                      type="text"
-                      placeholder={`Observations or evidence for ${crit.name}...`}
-                      value={currentFeedback}
-                      onChange={(e) => handleFeedbackChange(crit.id, e.target.value)}
-                      className="w-full rounded-lg border border-slate-200 bg-white p-2.5 text-xs text-slate-800 placeholder-slate-400 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                    />
                   </div>
-                </div>
-              );
-            })}
+                );
+              })
+            )}
           </div>
         </div>
 

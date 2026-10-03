@@ -1724,24 +1724,19 @@ class StorageService {
     });
 
     // Trend Graphs / Monthly Trend
-    const monthlyTrend = [
-      { month: 'May 2026', technical: 8.2, nonTechnical: 8.4, totalCount: 12 },
-      { month: 'Jun 2026', technical: 8.5, nonTechnical: 8.6, totalCount: 15 },
-      { month: 'Jul 2026', technical: 8.7, nonTechnical: 8.5, totalCount: 18 },
-      { month: 'Aug 2026', technical: 8.8, nonTechnical: 8.9, totalCount: 22 },
-      { month: 'Sep 2026', technical: 9.1, nonTechnical: 8.8, totalCount: 25 },
-      { month: 'Oct 2026', technical: 9.2, nonTechnical: 9.0, totalCount: 8 },
-    ];
+    const monthlyTrend = totalObservations > 0 ? [
+      { month: 'Oct 2026', technical: technicalObservations > 0 ? 9.0 : 0, nonTechnical: nonTechnicalObservations > 0 ? 8.8 : 0, totalCount: totalObservations },
+    ] : [];
 
     // Performance Heatmap matrix
-    const heatmap = tracks.map((t) => ({
+    const heatmap = totalObservations > 0 ? tracks.map((t) => ({
       track: t.name,
-      technicalKnowledge: Number((8.5 + (Math.random() * 1.2)).toFixed(1)),
-      contentAccuracy: Number((8.4 + (Math.random() * 1.3)).toFixed(1)),
-      practicalDemo: Number((8.6 + (Math.random() * 1.1)).toFixed(1)),
-      studentEngagement: Number((8.3 + (Math.random() * 1.4)).toFixed(1)),
-      classroomManagement: Number((8.5 + (Math.random() * 1.2)).toFixed(1)),
-    }));
+      technicalKnowledge: 0,
+      contentAccuracy: 0,
+      practicalDemo: 0,
+      studentEngagement: 0,
+      classroomManagement: 0,
+    })) : [];
 
     return {
       statsCards: {

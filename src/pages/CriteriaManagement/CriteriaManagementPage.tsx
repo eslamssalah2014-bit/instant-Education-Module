@@ -308,6 +308,11 @@ export const CriteriaManagementPage: React.FC = () => {
             </h3>
 
             <div className="space-y-2">
+              {templates.length === 0 && (
+                <div className="p-4 text-center text-xs text-slate-400 rounded-lg border border-dashed border-slate-200 dark:border-slate-800">
+                  No templates configured
+                </div>
+              )}
               {templates.map((tmpl) => {
                 const isSelected = tmpl.id === selectedTemplateId;
                 return (
@@ -362,6 +367,24 @@ export const CriteriaManagementPage: React.FC = () => {
         </div>
 
         {/* Selected Template Editor */}
+        {!selectedTemplate && (
+          <div className="lg:col-span-8 flex flex-col items-center justify-center p-12 rounded-xl border border-dashed border-slate-300 dark:border-slate-800 bg-white/50 dark:bg-slate-900/50 text-center">
+            <FileCheck2 className="h-12 w-12 text-slate-400 mb-3 opacity-60" />
+            <h3 className="text-base font-bold text-slate-900 dark:text-white">No Evaluation Templates Configured</h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-sm">
+              All previous templates have been purged. Create a new rubric template to define criteria and weights for faculty observations.
+            </p>
+            {isEducationManager && (
+              <button
+                onClick={() => setShowCreateTemplateModal(true)}
+                className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700"
+              >
+                <Plus className="h-4 w-4" />
+                Create Evaluation Template
+              </button>
+            )}
+          </div>
+        )}
         {selectedTemplate && (
           <div className="lg:col-span-8 space-y-5">
             {/* Header info bar of the selected template */}

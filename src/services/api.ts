@@ -20,6 +20,7 @@ import {
   StudentFeedbackRecord,
   QualityMetric,
   InstructorTier,
+  InstructorStatus,
   getTierFromScore,
 } from '../types';
 import { supabase } from './supabase';
@@ -41,6 +42,10 @@ import {
   initialQualityMetrics,
   initialAuditLogs,
 } from './storeData';
+import { logger } from '../utils/logger';
+
+const DB_VERSION_KEY = 'erp_storage_version';
+const CURRENT_DB_VERSION = 'v200_absolute_zero_reset';
 
 // Persistent client-side database
 class LocalDatabase {
@@ -60,9 +65,26 @@ class LocalDatabase {
   private studentFeedback: StudentFeedbackRecord[];
   private qualityMetrics: QualityMetric[];
   private auditLogs: AuditLog[];
+  private notifications: Notification[] = [];
   private currentUserId: string = 'usr-em-1';
 
   constructor() {
+    // Check if browser storage needs migration/reset to clean state
+    const currentVer = localStorage.getItem(DB_VERSION_KEY);
+    if (currentVer !== CURRENT_DB_VERSION) {
+      try {
+        const keysToRemove: string[] = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && k.startsWith('erp_')) {
+            keysToRemove.push(k);
+          }
+        }
+        keysToRemove.forEach((k) => localStorage.removeItem(k));
+      } catch (_) {}
+      localStorage.setItem(DB_VERSION_KEY, CURRENT_DB_VERSION);
+    }
+
     this.users = this.load('erp_users', initialUsers);
     this.tracks = this.load('erp_tracks', initialTracks);
     this.instructors = this.load('erp_instructors', initialInstructors);
@@ -81,7 +103,11 @@ class LocalDatabase {
     this.auditLogs = this.load('erp_audit_logs', initialAuditLogs);
 
     const savedUser = localStorage.getItem('erp_active_user_id');
-    if (savedUser) this.currentUserId = savedUser;
+    if (savedUser && this.users.some((u) => u.id === savedUser)) {
+      this.currentUserId = savedUser;
+    } else {
+      this.currentUserId = this.users[0]?.id || 'usr-em-1';
+    }
 
     // Background sync with Supabase if online
     this.syncFromSupabase();
@@ -106,7 +132,6 @@ class LocalDatabase {
       if (!supabase) return;
       const { data: remoteObs } = await supabase.from('Observation').select('*').limit(50);
       if (remoteObs && remoteObs.length > 0) {
-        // Sync any new observations from Supabase
         const existingIds = new Set(this.observations.map((o) => o.id));
         remoteObs.forEach((r: any) => {
           if (!existingIds.has(r.id)) {
@@ -121,11 +146,11 @@ class LocalDatabase {
               trackId: r.trackId,
               observationDate: r.observationDate || new Date().toISOString(),
               status: r.status || 'SUBMITTED',
-              totalScore: r.totalScore || 8.0,
-              weightedScore: r.weightedScore || 80.0,
-              percentageScore: r.percentageScore || 80.0,
-              grade: r.grade || 'Proficient',
-              tier: getTierFromScore(r.percentageScore || 80.0),
+              totalScore: r.totalScore || 0.0,
+              weightedScore: r.weightedScore || 0.0,
+              percentageScore: r.percentageScore || 0.0,
+              grade: r.grade || 'Developing',
+              tier: getTierFromScore(r.percentageScore || 0.0),
               createdAt: r.createdAt || new Date().toISOString(),
               updatedAt: r.updatedAt || new Date().toISOString(),
             });
@@ -163,9 +188,10 @@ class LocalDatabase {
     };
     this.auditLogs.unshift(newLog);
     this.save('erp_audit_logs', this.auditLogs);
+    logger.info(`AUDIT: ${action}`, { entity, entityId, details });
   }
 
-  // Users
+  // --- Users ---
   public getUsers(): User[] {
     return [...this.users];
   }
@@ -174,7 +200,7 @@ class LocalDatabase {
     return this.users.find((u) => u.id === this.currentUserId) || this.users[0];
   }
 
-  // Meta
+  // --- Meta ---
   public getMeta(): { tracks: Track[]; groups: Group[] } {
     return {
       tracks: [...this.tracks],
@@ -186,7 +212,60 @@ class LocalDatabase {
     };
   }
 
-  // Instructors
+  // --- Groups CRUD ---
+  public getGroups(): Group[] {
+    return this.groups.map((g) => ({
+      ...g,
+      track: this.tracks.find((t) => t.id === g.trackId),
+      instructor: this.instructors.find((i) => i.id === g.instructorId),
+    }));
+  }
+
+  public createGroup(payload: {
+    name: string;
+    code?: string;
+    trackId: string;
+    instructorId?: string;
+    studentCount?: number;
+    term?: string;
+  }): Group {
+    if (!payload.name?.trim()) throw new Error('Cohort Group name is required.');
+    if (!payload.trackId) throw new Error('Academic track is required for the cohort group.');
+
+    const track = this.tracks.find((t) => t.id === payload.trackId);
+    const trackCode = track ? track.code.replace('TRK-', '') : 'GEN';
+    const groupCode = payload.code || `GRP-${trackCode}-${Math.floor(10 + Math.random() * 90)}`;
+
+    const newGroup: Group = {
+      id: `grp-${Date.now()}`,
+      name: payload.name.trim(),
+      code: groupCode,
+      trackId: payload.trackId,
+      track,
+      instructorId: payload.instructorId || '',
+      term: payload.term || 'Q4 2026',
+      studentCount: payload.studentCount || 24,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    this.groups.unshift(newGroup);
+    this.save('erp_groups', this.groups);
+    this.logAction('GROUP_CREATED', 'Group', newGroup.id, { name: newGroup.name, code: newGroup.code });
+    return newGroup;
+  }
+
+  public deleteGroup(id: string): boolean {
+    const idx = this.groups.findIndex((g) => g.id === id);
+    if (idx === -1) throw new Error(`Cohort group with ID ${id} not found.`);
+    const grp = this.groups[idx];
+    this.groups.splice(idx, 1);
+    this.save('erp_groups', this.groups);
+    this.logAction('GROUP_DELETED', 'Group', id, { code: grp.code });
+    return true;
+  }
+
+  // --- Instructors CRUD ---
   public getInstructors(params?: { search?: string; trackId?: string; tier?: string; status?: string }): Instructor[] {
     let list = this.instructors.map((ins) => {
       const user = this.users.find((u) => u.id === ins.userId);
@@ -204,10 +283,10 @@ class LocalDatabase {
       const q = params.search.toLowerCase();
       list = list.filter(
         (i) =>
-          i.user?.name.toLowerCase().includes(q) ||
-          i.employeeId.toLowerCase().includes(q) ||
-          i.title.toLowerCase().includes(q) ||
-          i.specialization.toLowerCase().includes(q)
+          i.user?.name?.toLowerCase().includes(q) ||
+          i.employeeId?.toLowerCase().includes(q) ||
+          i.title?.toLowerCase().includes(q) ||
+          i.specialization?.toLowerCase().includes(q)
       );
     }
 
@@ -256,19 +335,132 @@ class LocalDatabase {
     };
   }
 
-  public updateInstructor(id: string, updates: Partial<Instructor>): Instructor {
-    const idx = this.instructors.findIndex((i) => i.id === id);
-    if (idx === -1) throw new Error('Instructor not found');
-    this.instructors[idx] = { ...this.instructors[idx], ...updates, updatedAt: new Date().toISOString() };
-    if (updates.averageScore !== undefined) {
-      this.instructors[idx].tier = getTierFromScore(updates.averageScore);
+  public createInstructor(payload: {
+    name: string;
+    email: string;
+    trackId: string;
+    title: string;
+    specialization: string;
+    phone?: string;
+    status?: InstructorStatus;
+  }): Instructor {
+    if (!payload.name?.trim()) throw new Error('Instructor Full Name is required.');
+    if (!payload.email?.trim()) throw new Error('Instructor Email is required.');
+    if (!payload.trackId) throw new Error('Academic Track is required.');
+
+    // Check if email already registered
+    const existing = this.users.find((u) => u.email.toLowerCase() === payload.email.toLowerCase().trim());
+    let userId = existing?.id;
+
+    if (!existing) {
+      userId = `usr-inst-${Date.now()}`;
+      const newUser: User = {
+        id: userId,
+        email: payload.email.trim(),
+        name: payload.name.trim(),
+        roleType: 'INSTRUCTOR',
+        phone: payload.phone || '+1 (555) 000-0000',
+        department: this.tracks.find((t) => t.id === payload.trackId)?.name || 'Academic Faculty',
+        trackId: payload.trackId,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      this.users.push(newUser);
+      this.save('erp_users', this.users);
     }
+
+    const track = this.tracks.find((t) => t.id === payload.trackId);
+    const trackCode = track ? track.code.replace('TRK-', '') : 'FAC';
+    const randomEmp = Math.floor(100 + Math.random() * 900);
+    const instId = `inst-${Date.now()}`;
+
+    const newInstructor: Instructor = {
+      id: instId,
+      userId: userId!,
+      user: this.users.find((u) => u.id === userId),
+      employeeId: `EMP-${trackCode}-${randomEmp}`,
+      trackId: payload.trackId,
+      track,
+      title: payload.title?.trim() || 'Academic Instructor',
+      specialization: payload.specialization?.trim() || 'Core Curriculum',
+      hireDate: new Date().toISOString(),
+      status: payload.status || 'ACTIVE',
+      averageScore: 0.0,
+      totalObserved: 0,
+      tier: 'B',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    this.instructors.unshift(newInstructor);
     this.save('erp_instructors', this.instructors);
-    this.logAction('INSTRUCTOR_UPDATED', 'Instructor', id, updates);
-    return this.instructors[idx];
+    this.logAction('INSTRUCTOR_CREATED', 'Instructor', instId, {
+      name: payload.name,
+      employeeId: newInstructor.employeeId,
+      track: track?.name,
+    });
+
+    return newInstructor;
   }
 
-  // Observations
+  public updateInstructor(
+    id: string,
+    updates: Partial<Instructor & { name?: string; email?: string }>
+  ): Instructor {
+    const idx = this.instructors.findIndex((i) => i.id === id);
+    if (idx === -1) throw new Error(`Instructor with ID ${id} not found.`);
+
+    const existing = this.instructors[idx];
+    const updated = {
+      ...existing,
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (updates.averageScore !== undefined) {
+      updated.tier = getTierFromScore(updates.averageScore);
+    }
+
+    // Update associated user if name or email changed
+    if (updates.name || updates.email) {
+      const userIdx = this.users.findIndex((u) => u.id === existing.userId);
+      if (userIdx !== -1) {
+        this.users[userIdx] = {
+          ...this.users[userIdx],
+          name: updates.name || this.users[userIdx].name,
+          email: updates.email || this.users[userIdx].email,
+          updatedAt: new Date().toISOString(),
+        };
+        this.save('erp_users', this.users);
+      }
+    }
+
+    this.instructors[idx] = updated;
+    this.save('erp_instructors', this.instructors);
+    this.logAction('INSTRUCTOR_UPDATED', 'Instructor', id, updates);
+    return updated;
+  }
+
+  public deleteInstructor(id: string): boolean {
+    const idx = this.instructors.findIndex((i) => i.id === id);
+    if (idx === -1) throw new Error(`Instructor with ID ${id} not found.`);
+
+    const inst = this.instructors[idx];
+    this.instructors.splice(idx, 1);
+    this.save('erp_instructors', this.instructors);
+
+    // Purge corresponding user if role is INSTRUCTOR
+    const userIdx = this.users.findIndex((u) => u.id === inst.userId && u.roleType === 'INSTRUCTOR');
+    if (userIdx !== -1) {
+      this.users.splice(userIdx, 1);
+      this.save('erp_users', this.users);
+    }
+
+    this.logAction('INSTRUCTOR_DELETED', 'Instructor', id, { employeeId: inst.employeeId });
+    return true;
+  }
+
+  // --- Observations CRUD ---
   public getObservations(params: {
     teacherId?: string;
     trackId?: string;
@@ -310,9 +502,9 @@ class LocalDatabase {
       list = list.filter(
         (o) =>
           o.observationCode.toLowerCase().includes(q) ||
-          o.instructor?.user?.name.toLowerCase().includes(q) ||
-          o.observer?.name.toLowerCase().includes(q) ||
-          o.group?.name.toLowerCase().includes(q)
+          o.instructor?.user?.name?.toLowerCase().includes(q) ||
+          o.observer?.name?.toLowerCase().includes(q) ||
+          o.group?.name?.toLowerCase().includes(q)
       );
     }
 
@@ -350,108 +542,87 @@ class LocalDatabase {
     return list.find((o) => o.id === id) || null;
   }
 
-  public createObservation(payload: {
-    instructorId: string;
-    groupId: string;
-    observationType: ObservationType;
-    observationDate?: string;
-    status?: ObservationStatus;
-    scores: { criterionId: string; score: number; feedback: string }[];
-    feedback: {
-      generalComments: string;
-      strengths: string;
-      areasForImprovement: string;
-      recommendations: string;
-    };
-    actionPlan?: { objective: string; actionSteps: string; deadline: string; assignedTo: string }[];
-  }): Observation {
-    const ins = this.instructors.find((i) => i.id === payload.instructorId);
-    if (!ins) throw new Error('Instructor not found');
-    const group = this.groups.find((g) => g.id === payload.groupId);
-    if (!group) throw new Error('Group not found');
+  public createObservation(payload: any): Observation {
+    if (!payload.instructorId) throw new Error('Please select an instructor.');
+    if (!payload.groupId) throw new Error('Please select a student cohort group.');
 
-    const template = this.templates.find((t) => t.type === payload.observationType);
-    const version = this.templateVersions.find((v) => v.id === template?.currentVersionId) || this.templateVersions[0];
-    const criteria = this.criteria.filter((c) => c.templateVersionId === version.id);
+    const instructor = this.instructors.find((i) => i.id === payload.instructorId);
+    if (!instructor) throw new Error('Instructor record does not exist.');
 
-    // Calculate Scores
-    let totalScore = 0;
-    let weightedSum = 0;
-    let totalWeight = 0;
+    const tmplVersion = this.templateVersions.find(
+      (v) => v.templateId === (payload.observationType === 'TECHNICAL' ? 'tmpl-tech' : 'tmpl-nontech')
+    ) || this.templateVersions[0];
 
-    const scoresList = payload.scores.map((s, index) => {
-      const crit = criteria.find((c) => c.id === s.criterionId);
+    const currentYear = new Date().getFullYear();
+    const count = this.observations.length + 1;
+    const code = `OBS-${currentYear}-${String(count).padStart(4, '0')}`;
+
+    const scoreItems = payload.scores || [];
+    let weightedPercentage = 0;
+    let totalRaw = 0;
+
+    scoreItems.forEach((s: any) => {
+      const crit = this.criteria.find((c) => c.id === s.criterionId);
       const weight = crit ? crit.weightPercentage : 20;
-      const weightedScore = (s.score / 10) * weight;
-      weightedSum += weightedScore;
-      totalWeight += weight;
-      totalScore += s.score;
-
-      return {
-        id: `sc-${Date.now()}-${index}`,
-        observationId: '',
-        criterionId: s.criterionId,
-        criterionName: crit?.name || 'Criterion',
-        score: s.score,
-        weight,
-        weightedScore: Number(weightedScore.toFixed(2)),
-        feedback: s.feedback || '',
-        createdAt: new Date().toISOString(),
-      };
+      weightedPercentage += (s.score / 10) * weight;
+      totalRaw += s.score;
     });
 
-    const finalWeightedScore = totalWeight > 0 ? Number(((weightedSum / totalWeight) * 100).toFixed(2)) : 80;
-    const finalTotalScore = scoresList.length > 0 ? Number((totalScore / scoresList.length).toFixed(2)) : 8.0;
-    const tier = getTierFromScore(finalWeightedScore);
+    const avgScore = scoreItems.length > 0 ? totalRaw / scoreItems.length : 8.0;
+    const finalPercentage = scoreItems.length > 0 ? Number(weightedPercentage.toFixed(1)) : 80.0;
+    const tier = getTierFromScore(finalPercentage);
 
     const grade =
-      finalWeightedScore >= 90
+      finalPercentage >= 90
         ? 'Outstanding'
-        : finalWeightedScore >= 80
+        : finalPercentage >= 80
         ? 'Proficient'
-        : finalWeightedScore >= 70
+        : finalPercentage >= 70
         ? 'Developing'
         : 'Needs Improvement';
 
-    const obsId = `obs-${Date.now()}`;
-    const obsCode = `OBS-2026-${String(this.observations.length + 1).padStart(4, '0')}`;
-
-    scoresList.forEach((s) => (s.observationId = obsId));
-
-    const actionPlan = (payload.actionPlan || []).map((ap, i) => ({
-      id: `ap-${Date.now()}-${i}`,
-      objective: ap.objective,
-      actionSteps: ap.actionSteps,
-      deadline: ap.deadline,
-      assignedTo: ap.assignedTo || ins.user?.name || 'Instructor',
-      status: 'PENDING' as const,
-    }));
-
     const newObservation: Observation = {
-      id: obsId,
-      observationCode: obsCode,
-      templateVersionId: version.id,
-      type: payload.observationType,
+      id: `obs-${Date.now()}`,
+      observationCode: code,
+      templateVersionId: tmplVersion ? tmplVersion.id : 'tmpl-ver-tech-1',
+      type: payload.observationType || 'TECHNICAL',
       instructorId: payload.instructorId,
-      observerId: this.currentUserId,
+      observerId: payload.observerId || this.currentUserId,
       groupId: payload.groupId,
-      trackId: ins.trackId,
+      trackId: instructor.trackId,
       observationDate: payload.observationDate || new Date().toISOString(),
       status: payload.status || 'SUBMITTED',
-      totalScore: finalTotalScore,
-      weightedScore: finalWeightedScore,
-      percentageScore: finalWeightedScore,
+      totalScore: Number(avgScore.toFixed(2)),
+      weightedScore: finalPercentage,
+      percentageScore: finalPercentage,
       grade,
       tier,
-      scores: scoresList,
+      scores: scoreItems.map((s: any, idx: number) => {
+        const crit = this.criteria.find((c) => c.id === s.criterionId);
+        const weight = crit ? crit.weightPercentage : 20;
+        return {
+          id: `score-${Date.now()}-${idx}`,
+          observationId: `obs-${Date.now()}`,
+          criterionId: s.criterionId,
+          criterionName: crit?.name || 'Criterion',
+          score: s.score,
+          weight,
+          weightedScore: Number(((s.score / 10) * weight).toFixed(2)),
+          feedback: s.feedback || '',
+          createdAt: new Date().toISOString(),
+        };
+      }),
       feedback: {
         id: `fb-${Date.now()}`,
-        observationId: obsId,
-        ...payload.feedback,
+        observationId: `obs-${Date.now()}`,
+        generalComments: payload.feedback?.generalComments || '',
+        strengths: payload.feedback?.strengths || '',
+        areasForImprovement: payload.feedback?.areasForImprovement || '',
+        recommendations: payload.feedback?.recommendations || '',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       },
-      actionPlan,
+      actionPlan: payload.actionPlan || [],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -459,53 +630,32 @@ class LocalDatabase {
     this.observations.unshift(newObservation);
     this.save('erp_observations', this.observations);
 
-    // Update instructor statistics
-    const insObs = this.observations.filter((o) => o.instructorId === ins.id && o.status !== 'DRAFT');
-    const newAvg = Number(
-      (insObs.reduce((sum, o) => sum + o.percentageScore, 0) / (insObs.length || 1)).toFixed(1)
-    );
-    this.updateInstructor(ins.id, {
-      totalObserved: insObs.length,
+    // Recalculate instructor average score
+    const instObs = this.observations.filter((o) => o.instructorId === instructor.id && o.status !== 'DRAFT');
+    const newTotalObs = instObs.length;
+    const newAvg =
+      newTotalObs > 0
+        ? Number((instObs.reduce((sum, o) => sum + o.percentageScore, 0) / newTotalObs).toFixed(1))
+        : finalPercentage;
+
+    this.updateInstructor(instructor.id, {
+      totalObserved: newTotalObs,
       averageScore: newAvg,
       lastObservedAt: newObservation.observationDate,
     });
 
-    this.logAction('OBSERVATION_CREATED', 'Observation', obsId, {
-      code: obsCode,
-      instructor: ins.user?.name,
-      percentageScore: finalWeightedScore,
+    this.logAction('OBSERVATION_CREATED', 'Observation', newObservation.id, {
+      code: newObservation.observationCode,
       tier,
+      percentageScore: finalPercentage,
     });
-
-    // Also attempt remote sync to Supabase if available
-    try {
-      supabase
-        .from('Observation')
-        .insert({
-          id: obsId,
-          observationCode: obsCode,
-          templateVersionId: version.id,
-          type: payload.observationType,
-          instructorId: payload.instructorId,
-          observerId: this.currentUserId,
-          groupId: payload.groupId,
-          trackId: ins.trackId,
-          observationDate: newObservation.observationDate,
-          status: newObservation.status,
-          totalScore: finalTotalScore,
-          weightedScore: finalWeightedScore,
-          percentageScore: finalWeightedScore,
-          grade,
-        })
-        .then(() => {});
-    } catch (_) {}
 
     return newObservation;
   }
 
   public updateObservation(id: string, payload: Partial<Observation>): Observation {
     const idx = this.observations.findIndex((o) => o.id === id);
-    if (idx === -1) throw new Error('Observation not found');
+    if (idx === -1) throw new Error(`Observation with ID ${id} not found.`);
 
     const existing = this.observations[idx];
     const updated = {
@@ -530,15 +680,130 @@ class LocalDatabase {
 
   public deleteObservation(id: string): boolean {
     const idx = this.observations.findIndex((o) => o.id === id);
-    if (idx === -1) return false;
+    if (idx === -1) throw new Error(`Observation with ID ${id} not found.`);
     const code = this.observations[idx].observationCode;
+    const instId = this.observations[idx].instructorId;
+
     this.observations.splice(idx, 1);
     this.save('erp_observations', this.observations);
+
+    // Recalculate instructor statistics
+    const instObs = this.observations.filter((o) => o.instructorId === instId && o.status !== 'DRAFT');
+    const total = instObs.length;
+    const avg = total > 0 ? Number((instObs.reduce((s, o) => s + o.percentageScore, 0) / total).toFixed(1)) : 0.0;
+    this.updateInstructor(instId, {
+      totalObserved: total,
+      averageScore: avg,
+    });
+
     this.logAction('OBSERVATION_DELETED', 'Observation', id, { code });
     return true;
   }
 
-  // Dashboard Analytics
+  // --- Templates CRUD ---
+  public getTemplates(): ObservationTemplate[] {
+    return this.templates.map((tmpl) => {
+      const versions = this.templateVersions.filter((v) => v.templateId === tmpl.id);
+      const currentVersion = versions.find((v) => v.id === tmpl.currentVersionId) || versions[0];
+      return {
+        ...tmpl,
+        currentVersion,
+        versions,
+      };
+    });
+  }
+
+  public getTemplatePreview(type: ObservationType): ObservationTemplate & { currentVersion: ObservationTemplateVersion } {
+    const tmpls = this.getTemplates();
+    const tmpl = tmpls.find((t) => t.type === type) || tmpls[0];
+    const ver = this.templateVersions.find((v) => v.templateId === tmpl.id) || this.templateVersions[0];
+    return {
+      ...tmpl,
+      currentVersion: ver,
+    };
+  }
+
+  public createTemplate(data: { name: string; code: string; type: ObservationType; description: string }): ObservationTemplate {
+    if (!data.name?.trim()) throw new Error('Template name is required.');
+    if (!data.code?.trim()) throw new Error('Template code is required.');
+
+    const id = `tmpl-${Date.now()}`;
+    const verId = `tmpl-ver-${Date.now()}`;
+
+    const defaultCrit: ObservationCriterion[] = [
+      {
+        id: `crit-${Date.now()}-1`,
+        templateVersionId: verId,
+        name: 'Technical Competence',
+        description: 'Demonstrates deep mastery of the subject matter.',
+        weightPercentage: 50,
+        orderIndex: 1,
+        isActive: true,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      {
+        id: `crit-${Date.now()}-2`,
+        templateVersionId: verId,
+        name: 'Student Communication & Clarity',
+        description: 'Explains complex ideas with clarity and engagement.',
+        weightPercentage: 50,
+        orderIndex: 2,
+        isActive: true,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+    ];
+
+    const newVersion: ObservationTemplateVersion = {
+      id: verId,
+      templateId: id,
+      versionNumber: 'v1.0',
+      changeLog: 'Initial release',
+      createdById: this.currentUserId,
+      isActive: true,
+      criteria: defaultCrit,
+      createdAt: new Date().toISOString(),
+    };
+
+    const newTmpl: ObservationTemplate = {
+      id,
+      code: data.code.toUpperCase().trim(),
+      name: data.name.trim(),
+      type: data.type,
+      description: data.description || '',
+      isActive: true,
+      isArchived: false,
+      currentVersionId: verId,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    this.templates.unshift(newTmpl);
+    this.templateVersions.unshift(newVersion);
+    this.criteria.push(...defaultCrit);
+
+    this.save('erp_templates', this.templates);
+    this.save('erp_template_versions', this.templateVersions);
+    this.save('erp_criteria', this.criteria);
+
+    this.logAction('TEMPLATE_CREATED', 'ObservationTemplate', id, { code: newTmpl.code, name: newTmpl.name });
+    return newTmpl;
+  }
+
+  public deleteTemplate(id: string): boolean {
+    const idx = this.templates.findIndex((t) => t.id === id);
+    if (idx === -1) throw new Error(`Template with ID ${id} not found.`);
+    const tmpl = this.templates[idx];
+    this.templates.splice(idx, 1);
+    this.templateVersions = this.templateVersions.filter((v) => v.templateId !== id);
+    this.save('erp_templates', this.templates);
+    this.save('erp_template_versions', this.templateVersions);
+    this.logAction('TEMPLATE_DELETED', 'ObservationTemplate', id, { code: tmpl.code });
+    return true;
+  }
+
+  // --- Dashboard Analytics ---
   public getDashboardAnalytics(trackId?: string): DashboardAnalytics {
     let obs = this.observations.filter((o) => o.status !== 'DRAFT');
     let insts = this.getInstructors();
@@ -551,13 +816,13 @@ class LocalDatabase {
     const totalObs = obs.length;
     const techObs = obs.filter((o) => o.type === 'TECHNICAL').length;
     const nonTechObs = obs.filter((o) => o.type === 'NON_TECHNICAL').length;
-    const avgObsScore = totalObs > 0 ? Number((obs.reduce((s, o) => s + o.percentageScore, 0) / totalObs).toFixed(1)) : 85.0;
+    const avgObsScore = totalObs > 0 ? Number((obs.reduce((s, o) => s + o.percentageScore, 0) / totalObs).toFixed(1)) : 0.0;
 
     const totalInsts = insts.length;
     const observedInsts = insts.filter((i) => i.totalObserved > 0).length;
-    const avgInstScore = totalInsts > 0 ? Number((insts.reduce((s, i) => s + i.averageScore, 0) / totalInsts).toFixed(1)) : 84.0;
-    const highestScore = Math.max(...insts.map((i) => i.averageScore), 95.0);
-    const lowestScore = Math.min(...insts.map((i) => i.averageScore), 68.0);
+    const avgInstScore = totalInsts > 0 ? Number((insts.reduce((s, i) => s + i.averageScore, 0) / totalInsts).toFixed(1)) : 0.0;
+    const highestScore = totalInsts > 0 ? Math.max(...insts.map((i) => i.averageScore)) : 0.0;
+    const lowestScore = totalInsts > 0 ? Math.min(...insts.map((i) => i.averageScore)) : 0.0;
 
     // Tier Distribution
     const aPlus = insts.filter((i) => (i.tier || getTierFromScore(i.averageScore)) === 'A+').length;
@@ -569,7 +834,7 @@ class LocalDatabase {
     const trackAnalytics = this.tracks.map((t) => {
       const trackObs = this.observations.filter((o) => o.trackId === t.id && o.status !== 'DRAFT');
       const trackInsts = this.instructors.filter((i) => i.trackId === t.id);
-      const avg = trackObs.length > 0 ? Number((trackObs.reduce((s, o) => s + o.percentageScore, 0) / trackObs.length).toFixed(1)) : 82.0;
+      const avg = trackObs.length > 0 ? Number((trackObs.reduce((s, o) => s + o.percentageScore, 0) / trackObs.length).toFixed(1)) : 0.0;
 
       return {
         trackId: t.id,
@@ -580,7 +845,7 @@ class LocalDatabase {
         percentageScore: avg,
         numberObservations: trackObs.length,
         numberInstructors: trackInsts.length,
-        performanceTrend: avg >= 85 ? '+4.2%' : '+1.8%',
+        performanceTrend: trackObs.length > 0 ? (avg >= 85 ? '+4.2%' : '+1.8%') : '0.0%',
       };
     });
 
@@ -589,7 +854,7 @@ class LocalDatabase {
       .filter((u) => u.roleType !== 'INSTRUCTOR')
       .map((u) => {
         const uObs = this.observations.filter((o) => o.observerId === u.id);
-        const avg = uObs.length > 0 ? Number((uObs.reduce((s, o) => s + o.percentageScore, 0) / uObs.length).toFixed(1)) : 88.0;
+        const avg = uObs.length > 0 ? Number((uObs.reduce((s, o) => s + o.percentageScore, 0) / uObs.length).toFixed(1)) : 0.0;
         return {
           observerId: u.id,
           observerName: u.name,
@@ -614,7 +879,7 @@ class LocalDatabase {
     }));
 
     const improvementInstructors = sorted
-      .filter((i) => i.averageScore < 80)
+      .filter((i) => i.averageScore < 80 && i.totalObserved > 0)
       .map((i) => ({
         id: i.id,
         name: i.user?.name || i.title,
@@ -626,39 +891,38 @@ class LocalDatabase {
       }));
 
     // Criteria analytics
-    const criteriaAnalytics = [
-      { criterionName: 'Technical Knowledge & Architecture', averageScore: 9.1, highestScore: 9.8, lowestScore: 7.2, evaluationsCount: totalObs, trend: '+0.4' },
-      { criterionName: 'Content Accuracy & Code Quality', averageScore: 8.6, highestScore: 9.5, lowestScore: 6.5, evaluationsCount: totalObs, trend: '+0.2' },
-      { criterionName: 'Live Demonstration & Debugging', averageScore: 8.4, highestScore: 9.6, lowestScore: 6.0, evaluationsCount: totalObs, trend: '+0.5' },
-      { criterionName: 'Student Engagement & Interaction', averageScore: 8.7, highestScore: 9.3, lowestScore: 7.0, evaluationsCount: totalObs, trend: '+0.6' },
-      { criterionName: 'Classroom & Time Management', averageScore: 8.2, highestScore: 9.3, lowestScore: 7.3, evaluationsCount: totalObs, trend: '+0.1' },
-    ];
+    const criteriaAnalytics = totalObs > 0 ? [
+      { criterionName: 'Technical Knowledge & Architecture', averageScore: 9.1, highestScore: 9.8, lowestScore: 7.2, evaluationsCount: totalObs, trend: '+0.0' },
+      { criterionName: 'Content Accuracy & Code Quality', averageScore: 8.6, highestScore: 9.5, lowestScore: 6.5, evaluationsCount: totalObs, trend: '+0.0' },
+      { criterionName: 'Live Demonstration & Debugging', averageScore: 8.4, highestScore: 9.6, lowestScore: 6.0, evaluationsCount: totalObs, trend: '+0.0' },
+      { criterionName: 'Student Engagement & Interaction', averageScore: 8.7, highestScore: 9.3, lowestScore: 7.0, evaluationsCount: totalObs, trend: '+0.0' },
+      { criterionName: 'Classroom & Time Management', averageScore: 8.2, highestScore: 9.3, lowestScore: 7.3, evaluationsCount: totalObs, trend: '+0.0' },
+    ] : [];
 
     // Monthly Trend
-    const monthlyTrend = [
-      { month: 'May', technical: 88.0, nonTechnical: 86.5, totalCount: 4, averageScore: 87.2 },
-      { month: 'Jun', technical: 89.2, nonTechnical: 87.0, totalCount: 5, averageScore: 88.1 },
-      { month: 'Jul', technical: 87.5, nonTechnical: 88.2, totalCount: 6, averageScore: 87.8 },
-      { month: 'Aug', technical: 90.1, nonTechnical: 89.0, totalCount: 5, averageScore: 89.5 },
-      { month: 'Sep', technical: 91.4, nonTechnical: 89.5, totalCount: 8, averageScore: 90.4 },
-      { month: 'Oct', technical: 92.5, nonTechnical: 91.0, totalCount: totalObs, averageScore: avgObsScore },
-    ];
+    const monthlyTrend = totalObs > 0 ? [
+      { month: 'Oct', technical: techObs > 0 ? 90.0 : 0, nonTechnical: nonTechObs > 0 ? 88.0 : 0, totalCount: totalObs, averageScore: avgObsScore },
+    ] : [];
 
     // Heatmap
-    const heatmap = [
-      { track: 'Frontend', technicalKnowledge: 9.4, contentAccuracy: 9.1, practicalDemo: 9.2, studentEngagement: 9.0, classroomManagement: 8.9 },
-      { track: 'Backend', technicalKnowledge: 9.5, contentAccuracy: 9.2, practicalDemo: 8.8, studentEngagement: 8.4, classroomManagement: 9.1 },
-      { track: 'AI & Data', technicalKnowledge: 9.8, contentAccuracy: 9.5, practicalDemo: 9.4, studentEngagement: 9.2, classroomManagement: 9.2 },
-      { track: 'Mobile', technicalKnowledge: 8.5, contentAccuracy: 8.0, practicalDemo: 8.2, studentEngagement: 8.4, classroomManagement: 7.9 },
-      { track: 'Cybersecurity', technicalKnowledge: 8.0, contentAccuracy: 7.4, practicalDemo: 7.0, studentEngagement: 7.8, classroomManagement: 7.6 },
-      { track: 'UI/UX Design', technicalKnowledge: 8.8, contentAccuracy: 8.9, practicalDemo: 8.5, studentEngagement: 8.8, classroomManagement: 8.7 },
-    ];
+    const heatmap = this.tracks.map((t) => {
+      const tObs = this.observations.filter((o) => o.trackId === t.id);
+      const val = tObs.length > 0 ? Number((tObs.reduce((s, o) => s + o.percentageScore, 0) / tObs.length / 10).toFixed(1)) : 0.0;
+      return {
+        track: t.name,
+        technicalKnowledge: val,
+        contentAccuracy: val,
+        practicalDemo: val,
+        studentEngagement: val,
+        classroomManagement: val,
+      };
+    });
 
     return {
       statsCards: {
         observationMetrics: {
           totalObservations: totalObs,
-          observationsThisMonth: Math.min(totalObs, 6),
+          observationsThisMonth: totalObs,
           technicalObservations: techObs,
           nonTechnicalObservations: nonTechObs,
           averageObservationScore: avgObsScore,
@@ -670,7 +934,12 @@ class LocalDatabase {
           highestInstructorScore: highestScore,
           lowestInstructorScore: lowestScore,
         },
-        tierDistribution: { aPlus, a, bPlus, b },
+        tierDistribution: {
+          aPlus,
+          a,
+          bPlus,
+          b,
+        },
       },
       trackAnalytics,
       observerAnalytics,
@@ -682,62 +951,49 @@ class LocalDatabase {
     };
   }
 
-  // Templates
-  public getTemplates(): ObservationTemplate[] {
-    return this.templates.map((tmpl) => ({
-      ...tmpl,
-      currentVersion: this.templateVersions.find((v) => v.id === tmpl.currentVersionId),
-      versions: this.templateVersions.filter((v) => v.templateId === tmpl.id),
-    }));
-  }
-
-  public getTemplatePreview(type: ObservationType) {
-    const tmpl = this.templates.find((t) => t.type === type) || this.templates[0];
-    const version = this.templateVersions.find((v) => v.id === tmpl.currentVersionId) || this.templateVersions[0];
-    const criteria = this.criteria.filter((c) => c.templateVersionId === version.id);
-    return {
-      ...tmpl,
-      currentVersion: {
-        ...version,
-        criteria,
-      },
-    };
-  }
-
-  public createTemplate(data: { name: string; code: string; type: ObservationType; description: string }): ObservationTemplate {
-    const newTmpl: ObservationTemplate = {
-      id: `tmpl-${Date.now()}`,
-      code: data.code,
-      name: data.name,
-      type: data.type,
-      description: data.description,
-      isActive: true,
-      isArchived: false,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    this.templates.push(newTmpl);
-    this.save('erp_templates', this.templates);
-    this.logAction('TEMPLATE_CREATED', 'ObservationTemplate', newTmpl.id, { name: data.name });
-    return newTmpl;
-  }
-
-  // KPIs
+  // --- KPI Management CRUD ---
   public getKpiDefinitions(): KpiDefinition[] {
     return [...this.kpis];
   }
 
+  public createKpiDefinition(data: Partial<KpiDefinition>): KpiDefinition {
+    if (!data.name?.trim()) throw new Error('KPI name is required.');
+    const newKpi: KpiDefinition = {
+      id: `kpi-${Date.now()}`,
+      code: data.code || `KPI-${Date.now().toString().slice(-4)}`,
+      name: data.name.trim(),
+      category: data.category || 'PEDAGOGICAL',
+      weight: Number(data.weight) || 25,
+      targetValue: Number(data.targetValue) || 85,
+      unit: data.unit || '%',
+      description: data.description || '',
+    };
+    this.kpis.push(newKpi);
+    this.save('erp_kpis', this.kpis);
+    this.logAction('KPI_CREATED', 'KpiDefinition', newKpi.id, { name: newKpi.name });
+    return newKpi;
+  }
+
   public updateKpiDefinition(id: string, updates: Partial<KpiDefinition>): KpiDefinition {
     const idx = this.kpis.findIndex((k) => k.id === id);
-    if (idx === -1) throw new Error('KPI not found');
+    if (idx === -1) throw new Error(`KPI definition with ID ${id} not found.`);
     this.kpis[idx] = { ...this.kpis[idx], ...updates };
     this.save('erp_kpis', this.kpis);
     this.logAction('KPI_UPDATED', 'KpiDefinition', id, updates);
     return this.kpis[idx];
   }
 
-  public getKpiScorecards(period?: string): KpiScorecard[] {
-    if (period) return this.scorecards.filter((s) => s.period.includes(period));
+  public deleteKpiDefinition(id: string): boolean {
+    const idx = this.kpis.findIndex((k) => k.id === id);
+    if (idx === -1) throw new Error(`KPI definition with ID ${id} not found.`);
+    const kpi = this.kpis[idx];
+    this.kpis.splice(idx, 1);
+    this.save('erp_kpis', this.kpis);
+    this.logAction('KPI_DELETED', 'KpiDefinition', id, { code: kpi.code });
+    return true;
+  }
+
+  public getKpiScorecards(): KpiScorecard[] {
     return [...this.scorecards];
   }
 
@@ -745,124 +1001,270 @@ class LocalDatabase {
     return [...this.kpiHistory];
   }
 
-  // Coaching
-  public getCoachingSessions(instructorId?: string): CoachingSession[] {
-    if (instructorId) return this.coachingSessions.filter((c) => c.instructorId === instructorId);
+  // --- Coaching & PIP CRUD ---
+  public getCoachingSessions(): CoachingSession[] {
     return [...this.coachingSessions];
   }
 
-  public createCoachingSession(data: {
-    instructorId: string;
-    focusArea: 'PEDAGOGY' | 'TECH_MASTERY' | 'STUDENT_ENGAGEMENT' | 'TIME_MANAGEMENT' | 'CURRICULUM';
-    objectives: string;
-    coachNotes: string;
-    actionItems: { task: string; targetDate: string }[];
-    date?: string;
-    followUpDate?: string;
-  }): CoachingSession {
-    const ins = this.getInstructors().find((i) => i.id === data.instructorId);
-    const user = this.getCurrentUser();
+  public createCoachingSession(data: any): CoachingSession {
+    if (!data.instructorId) throw new Error('Please select an instructor.');
 
-    const newSession: CoachingSession = {
+    const inst = this.instructors.find((i) => i.id === data.instructorId);
+    let items: any[] = [];
+    if (Array.isArray(data.actionItems)) {
+      items = data.actionItems.map((a: any, idx: number) => ({
+        id: a.id || `item-${Date.now()}-${idx}`,
+        task: a.task || String(a),
+        targetDate: a.targetDate || '2026-10-30',
+        isCompleted: Boolean(a.isCompleted),
+      }));
+    } else if (typeof data.actionTasks === 'string') {
+      items = data.actionTasks
+        .split('\n')
+        .map((t: string) => t.trim())
+        .filter(Boolean)
+        .map((t: string, idx: number) => ({
+          id: `item-${Date.now()}-${idx}`,
+          task: t,
+          targetDate: data.followUpDate || '2026-10-30',
+          isCompleted: false,
+        }));
+    }
+
+    const session: CoachingSession = {
       id: `coach-${Date.now()}`,
       instructorId: data.instructorId,
-      instructorName: ins?.user?.name || 'Instructor',
-      coachId: user.id,
-      coachName: user.name,
-      trackId: ins?.trackId || 'trk-fe',
-      trackName: ins?.track?.name || 'Track',
-      date: data.date || new Date().toISOString(),
-      focusArea: data.focusArea,
-      objectives: data.objectives,
-      coachNotes: data.coachNotes,
-      actionItems: data.actionItems.map((a, i) => ({
-        id: `act-${Date.now()}-${i}`,
-        task: a.task,
-        targetDate: a.targetDate,
-        isCompleted: false,
-      })),
-      status: 'SCHEDULED',
+      instructorName: inst?.user?.name || inst?.title || 'Faculty Member',
+      coachId: this.currentUserId,
+      coachName: this.getCurrentUser().name,
+      trackId: inst?.trackId || '',
+      trackName: inst?.track?.name || 'Academic Track',
+      date: data.sessionDate || data.date || new Date().toISOString().split('T')[0],
+      focusArea: data.focusArea || 'PEDAGOGY',
+      objectives: data.objectives || '',
+      coachNotes: data.coachNotes || '',
+      actionItems: items,
+      status: data.status || 'SCHEDULED',
       followUpDate: data.followUpDate,
       createdAt: new Date().toISOString(),
     };
 
-    this.coachingSessions.unshift(newSession);
+    this.coachingSessions.unshift(session);
     this.save('erp_coaching_sessions', this.coachingSessions);
-    this.logAction('COACHING_SESSION_CREATED', 'CoachingSession', newSession.id, { instructor: newSession.instructorName });
-    return newSession;
+    this.logAction('COACHING_SESSION_CREATED', 'CoachingSession', session.id, {
+      instructor: session.instructorName,
+      focusArea: session.focusArea,
+    });
+    return session;
   }
 
   public updateCoachingSession(id: string, updates: Partial<CoachingSession>): CoachingSession {
     const idx = this.coachingSessions.findIndex((c) => c.id === id);
-    if (idx === -1) throw new Error('Session not found');
+    if (idx === -1) throw new Error(`Coaching session with ID ${id} not found.`);
     this.coachingSessions[idx] = { ...this.coachingSessions[idx], ...updates };
     this.save('erp_coaching_sessions', this.coachingSessions);
     this.logAction('COACHING_SESSION_UPDATED', 'CoachingSession', id, updates);
     return this.coachingSessions[idx];
   }
 
-  public getImprovementPlans(instructorId?: string): InstructorImprovementPlan[] {
-    if (instructorId) return this.improvementPlans.filter((p) => p.instructorId === instructorId);
+  public deleteCoachingSession(id: string): boolean {
+    const idx = this.coachingSessions.findIndex((c) => c.id === id);
+    if (idx === -1) throw new Error(`Coaching session with ID ${id} not found.`);
+    this.coachingSessions.splice(idx, 1);
+    this.save('erp_coaching_sessions', this.coachingSessions);
+    this.logAction('COACHING_SESSION_DELETED', 'CoachingSession', id);
+    return true;
+  }
+
+  public getImprovementPlans(): InstructorImprovementPlan[] {
     return [...this.improvementPlans];
   }
 
-  public createImprovementPlan(data: {
-    instructorId: string;
-    title: string;
-    reason: string;
-    startDate: string;
-    targetReviewDate: string;
-    milestones: { title: string; deadline: string }[];
-  }): InstructorImprovementPlan {
-    const ins = this.getInstructors().find((i) => i.id === data.instructorId);
-    const user = this.getCurrentUser();
+  public createImprovementPlan(data: any): InstructorImprovementPlan {
+    if (!data.instructorId) throw new Error('Please select an instructor.');
+    const inst = this.instructors.find((i) => i.id === data.instructorId);
 
     const plan: InstructorImprovementPlan = {
       id: `pip-${Date.now()}`,
       instructorId: data.instructorId,
-      instructorName: ins?.user?.name || 'Instructor',
-      trackId: ins?.trackId || 'trk-sec',
-      title: data.title,
-      reason: data.reason,
-      startDate: data.startDate,
-      targetReviewDate: data.targetReviewDate,
-      status: 'ACTIVE',
-      mentorName: user.name,
-      milestones: data.milestones.map((m) => ({ ...m, status: 'PENDING' })),
+      instructorName: inst?.user?.name || inst?.title || 'Faculty Member',
+      trackId: inst?.trackId || '',
+      title: data.title || 'Instructional Acceleration Plan',
+      reason: data.objectives || data.reason || 'Targeted performance reinforcement.',
+      startDate: new Date().toISOString().split('T')[0],
+      targetReviewDate: new Date(Date.now() + 45 * 86400000).toISOString().split('T')[0],
+      status: data.status || 'ACTIVE',
+      milestones: data.milestones || [
+        { title: 'Initial methodology review', deadline: '2026-10-15', status: 'IN_PROGRESS' },
+        { title: 'Mid-cycle live demonstration', deadline: '2026-10-30', status: 'PENDING' },
+        { title: 'Final pedagogical audit', deadline: '2026-11-15', status: 'PENDING' },
+      ],
+      mentorName: this.getCurrentUser().name,
     };
 
     this.improvementPlans.unshift(plan);
     this.save('erp_improvement_plans', this.improvementPlans);
-    this.logAction('IMPROVEMENT_PLAN_ACTIVATED', 'InstructorImprovementPlan', plan.id, { instructor: plan.instructorName });
+    this.logAction('IMPROVEMENT_PLAN_CREATED', 'InstructorImprovementPlan', plan.id, {
+      instructor: plan.instructorName,
+    });
     return plan;
   }
 
-  // Feedback & Quality
-  public getStudentFeedback(instructorId?: string, trackId?: string): StudentFeedbackRecord[] {
-    let list = [...this.studentFeedback];
-    if (instructorId) list = list.filter((f) => f.instructorId === instructorId);
-    if (trackId) list = list.filter((f) => f.trackId === trackId);
-    return list;
+  public updateImprovementPlan(id: string, updates: Partial<InstructorImprovementPlan>): InstructorImprovementPlan {
+    const idx = this.improvementPlans.findIndex((p) => p.id === id);
+    if (idx === -1) throw new Error(`Improvement plan with ID ${id} not found.`);
+    this.improvementPlans[idx] = { ...this.improvementPlans[idx], ...updates };
+    this.save('erp_improvement_plans', this.improvementPlans);
+    this.logAction('IMPROVEMENT_PLAN_UPDATED', 'InstructorImprovementPlan', id, updates);
+    return this.improvementPlans[idx];
   }
 
-  public createStudentFeedback(data: Omit<StudentFeedbackRecord, 'id' | 'submissionDate'>): StudentFeedbackRecord {
+  public deleteImprovementPlan(id: string): boolean {
+    const idx = this.improvementPlans.findIndex((p) => p.id === id);
+    if (idx === -1) throw new Error(`Improvement plan with ID ${id} not found.`);
+    this.improvementPlans.splice(idx, 1);
+    this.save('erp_improvement_plans', this.improvementPlans);
+    this.logAction('IMPROVEMENT_PLAN_DELETED', 'InstructorImprovementPlan', id);
+    return true;
+  }
+
+  // --- Student Feedback & Quality Metrics CRUD ---
+  public getStudentFeedback(): StudentFeedbackRecord[] {
+    return [...this.studentFeedback];
+  }
+
+  public createStudentFeedback(data: any): StudentFeedbackRecord {
+    if (!data.instructorId) throw new Error('Instructor is required for student feedback.');
+    const inst = this.instructors.find((i) => i.id === data.instructorId);
+
     const record: StudentFeedbackRecord = {
-      ...data,
       id: `sfb-${Date.now()}`,
+      instructorId: data.instructorId,
+      instructorName: inst?.user?.name || inst?.title || 'Instructor',
+      trackId: inst?.trackId || '',
+      trackName: inst?.track?.name || 'Academic Track',
+      groupId: data.groupId || '',
+      groupName: data.groupName || 'Cohort Group',
       submissionDate: new Date().toISOString().split('T')[0],
+      overallRating: Number(data.overallRating) || 4.5,
+      clarityRating: Number(data.clarityRating) || 4.5,
+      engagementRating: Number(data.engagementRating) || 4.5,
+      supportRating: Number(data.supportRating) || 4.5,
+      pacingRating: Number(data.pacingRating) || 4.5,
+      studentComments: data.studentComments || '',
+      sentiment: data.overallRating >= 4 ? 'POSITIVE' : data.overallRating >= 3 ? 'NEUTRAL' : 'NEGATIVE',
     };
+
     this.studentFeedback.unshift(record);
     this.save('erp_student_feedback', this.studentFeedback);
+    this.logAction('FEEDBACK_LOGGED', 'StudentFeedback', record.id, {
+      instructor: record.instructorName,
+      rating: record.overallRating,
+    });
     return record;
+  }
+
+  public deleteStudentFeedback(id: string): boolean {
+    const idx = this.studentFeedback.findIndex((f) => f.id === id);
+    if (idx === -1) throw new Error(`Student feedback record with ID ${id} not found.`);
+    this.studentFeedback.splice(idx, 1);
+    this.save('erp_student_feedback', this.studentFeedback);
+    this.logAction('FEEDBACK_DELETED', 'StudentFeedback', id);
+    return true;
   }
 
   public getQualityMetrics(): QualityMetric[] {
     return [...this.qualityMetrics];
   }
 
-  // Audit Logs
+  // --- Audit Logs ---
   public getAuditLogs(): AuditLog[] {
     return [...this.auditLogs];
+  }
+
+  // --- Reset System Data ---
+  // --- Reset System Data ---
+  public resetSystemData(): {
+    cleared: {
+      observations: number;
+      instructors: number;
+      groups: number;
+      tracks: number;
+      templates: number;
+      criteria: number;
+      kpiDefinitions: number;
+      scorecards: number;
+      coachingSessions: number;
+      improvementPlans: number;
+      studentFeedback: number;
+      auditLogs: number;
+    };
+    preserved: {
+      roles: number;
+      systemUsers: number;
+    };
+  } {
+    const counts = {
+      observations: this.observations.length,
+      instructors: this.instructors.length,
+      groups: this.groups.length,
+      tracks: this.tracks.length,
+      templates: this.templates.length,
+      criteria: this.criteria.length,
+      kpiDefinitions: this.kpis.length,
+      scorecards: this.scorecards.length,
+      coachingSessions: this.coachingSessions.length,
+      improvementPlans: this.improvementPlans.length,
+      studentFeedback: this.studentFeedback.length,
+      auditLogs: this.auditLogs.length,
+    };
+
+    // Purge ALL business data
+    this.observations = [];
+    this.instructors = [];
+    this.groups = [];
+    this.tracks = [];
+    this.templates = [];
+    this.templateVersions = [];
+    this.criteria = [];
+    this.kpis = [];
+    this.scorecards = [];
+    this.kpiHistory = [];
+    this.coachingSessions = [];
+    this.improvementPlans = [];
+    this.studentFeedback = [];
+    this.qualityMetrics = [];
+    this.auditLogs = [];
+    this.notifications = [];
+
+    // Retain only system configuration accounts
+    this.users = initialUsers;
+    this.currentUserId = 'usr-em-1';
+
+    // Wipe all erp localStorage keys
+    try {
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('erp_')) {
+          keysToRemove.push(k);
+        }
+      }
+      keysToRemove.forEach((k) => localStorage.removeItem(k));
+    } catch (_) {}
+
+    localStorage.setItem(DB_VERSION_KEY, CURRENT_DB_VERSION);
+    this.save('erp_users', this.users);
+
+    logger.info('SYSTEM_DATA_RESET_COMPLETED', counts);
+
+    return {
+      cleared: counts,
+      preserved: {
+        roles: 4,
+        systemUsers: 1,
+      },
+    };
   }
 }
 
@@ -872,18 +1274,35 @@ export const setApiUserId = (id: string) => db.setUserId(id);
 export const getApiUserId = () => db.getUserId();
 
 export const api = {
-  // Auth
+  // Auth & Context
   getUsers: async () => db.getUsers(),
   getCurrentUser: async () => db.getCurrentUser(),
 
-  // Meta
+  // Meta & Lookups
   getMeta: async () => db.getMeta(),
+
+  // Groups
+  getGroups: async () => db.getGroups(),
+  createGroup: async (data: { name: string; code?: string; trackId: string; instructorId?: string; studentCount?: number; term?: string }) =>
+    db.createGroup(data),
+  deleteGroup: async (id: string) => db.deleteGroup(id),
 
   // Instructors
   getInstructors: async (params?: { search?: string; trackId?: string; tier?: string; status?: string }) =>
     db.getInstructors(params),
   getInstructorById: async (id: string) => db.getInstructorById(id),
-  updateInstructor: async (id: string, updates: Partial<Instructor>) => db.updateInstructor(id, updates),
+  createInstructor: async (data: {
+    name: string;
+    email: string;
+    trackId: string;
+    title: string;
+    specialization: string;
+    phone?: string;
+    status?: InstructorStatus;
+  }) => db.createInstructor(data),
+  updateInstructor: async (id: string, updates: Partial<Instructor & { name?: string; email?: string }>) =>
+    db.updateInstructor(id, updates),
+  deleteInstructor: async (id: string) => db.deleteInstructor(id),
 
   // Observations
   getObservations: async (params: {
@@ -912,161 +1331,7 @@ export const api = {
   getTemplates: async () => db.getTemplates(),
   getTemplatePreview: async (type: ObservationType) => db.getTemplatePreview(type),
   createTemplate: async (data: any) => db.createTemplate(data),
-
-  // Dashboard
-  getDashboardAnalytics: async (trackId?: string) => db.getDashboardAnalytics(trackId),
-
-  // KPI Management
-  getKpiDefinitions: async () => db.getKpiDefinitions(),
-  updateKpiDefinition: async (id: string, updates: Partial<KpiDefinition>) => db.updateKpiDefinition(id, updates),
-  getKpiScorecards: async (period?: string) => db.getKpiScorecards(period),
-  getKpiHistory: async () => db.getKpiHistory(),
-
-  // Coaching & Development
-  getCoachingSessions: async (instructorId?: string) => db.getCoachingSessions(instructorId),
-  createCoachingSession: async (data: any) => db.createCoachingSession(data),
-  updateCoachingSession: async (id: string, updates: Partial<CoachingSession>) => db.updateCoachingSession(id, updates),
-  getImprovementPlans: async (instructorId?: string) => db.getImprovementPlans(instructorId),
-  createImprovementPlan: async (data: any) => db.createImprovementPlan(data),
-
-  // Feedback & Quality
-  getStudentFeedback: async (instructorId?: string, trackId?: string) => db.getStudentFeedback(instructorId, trackId),
-  createStudentFeedback: async (data: any) => db.createStudentFeedback(data),
-  getQualityMetrics: async () => db.getQualityMetrics(),
-
-  // Audit Logs
-  getAuditLogs: async () => db.getAuditLogs(),
-
-  // Notifications
-  getNotifications: async () => [
-    {
-      id: 'notif-1',
-      userId: db.getCurrentUser().id,
-      title: 'Observation OBS-2026-0001 Approved',
-      message: 'David Miller received Tier A+ (92.5%) in React Reconciliation session.',
-      type: 'OBSERVATION_SUBMITTED',
-      isRead: false,
-      createdAt: new Date().toISOString(),
-    },
-    {
-      id: 'notif-2',
-      userId: db.getCurrentUser().id,
-      title: 'New Coaching Session Assigned',
-      message: 'Coaching plan for Tariq Mansoor (Cybersecurity) is scheduled for follow-up.',
-      type: 'COACHING_ASSIGNED',
-      isRead: false,
-      createdAt: new Date(Date.now() - 3600000).toISOString(),
-    },
-    {
-      id: 'notif-3',
-      userId: db.getCurrentUser().id,
-      title: 'Quarterly KPI Scorecards Updated',
-      message: 'October 2026 faculty KPI scorecards have been calculated.',
-      type: 'KPI_CALCULATED',
-      isRead: true,
-      createdAt: new Date(Date.now() - 86400000).toISOString(),
-    },
-  ],
-  markNotificationAsRead: async (_id: string) => true,
-
-  // Reports
-  getReportData: async (reportType: string, filters: any) => {
-    const insts = db.getInstructors();
-    const obs = db.getObservations({}).items;
-
-    if (reportType === 'INSTRUCTOR_PERFORMANCE') {
-      return {
-        data: insts.map((i) => ({
-          Instructor: i.user?.name || i.title,
-          EmployeeId: i.employeeId,
-          Track: i.track?.name,
-          AverageScore: `${i.averageScore.toFixed(1)}%`,
-          Tier: i.tier || 'A',
-          TotalObservations: i.totalObserved,
-          Status: i.status,
-          Hired: new Date(i.hireDate).toLocaleDateString(),
-        })),
-      };
-    }
-
-    if (reportType === 'TRACK_PERFORMANCE') {
-      const meta = db.getMeta();
-      return {
-        data: meta.tracks.map((t) => {
-          const trackObs = obs.filter((o) => o.trackId === t.id);
-          const avg = trackObs.length > 0 ? (trackObs.reduce((s, o) => s + o.percentageScore, 0) / trackObs.length).toFixed(1) : '82.0';
-          return {
-            TrackName: t.name,
-            Code: t.code,
-            AverageScore: `${avg}%`,
-            TotalEvaluations: trackObs.length,
-            InstructorsCount: insts.filter((i) => i.trackId === t.id).length,
-          };
-        }),
-      };
-    }
-
-    if (reportType === 'OBSERVER_PERFORMANCE') {
-      const users = db.getUsers().filter((u) => u.roleType !== 'INSTRUCTOR');
-      return {
-        data: users.map((u) => {
-          const userObs = obs.filter((o) => o.observerId === u.id);
-          const avg = userObs.length > 0 ? (userObs.reduce((s, o) => s + o.percentageScore, 0) / userObs.length).toFixed(1) : '88.0';
-          return {
-            Observer: u.name,
-            Role: u.roleType.replace(/_/g, ' '),
-            ObservationsConducted: userObs.length,
-            AverageScoreAwarded: `${avg}%`,
-          };
-        }),
-      };
-    }
-
-    if (reportType === 'MONTHLY_OBSERVATIONS') {
-      return {
-        data: [
-          { Month: 'May 2026', TechnicalCount: 3, PedagogicalCount: 1, TotalCount: 4, AverageScore: '87.2%' },
-          { Month: 'Jun 2026', TechnicalCount: 4, PedagogicalCount: 1, TotalCount: 5, AverageScore: '88.1%' },
-          { Month: 'Jul 2026', TechnicalCount: 4, PedagogicalCount: 2, TotalCount: 6, AverageScore: '87.8%' },
-          { Month: 'Aug 2026', TechnicalCount: 3, PedagogicalCount: 2, TotalCount: 5, AverageScore: '89.5%' },
-          { Month: 'Sep 2026', TechnicalCount: 6, PedagogicalCount: 2, TotalCount: 8, AverageScore: '90.4%' },
-          { Month: 'Oct 2026', TechnicalCount: 7, PedagogicalCount: 2, TotalCount: 9, AverageScore: '90.8%' },
-        ],
-      };
-    }
-
-    // Default / CRITERIA_ANALYSIS
-    return {
-      data: [
-        { Criterion: 'Technical Knowledge & Architecture', AverageScore: '9.1/10', Weight: '25%', Evaluations: obs.length },
-        { Criterion: 'Content Accuracy & Code Quality', AverageScore: '8.6/10', Weight: '20%', Evaluations: obs.length },
-        { Criterion: 'Live Demonstration & Problem Solving', AverageScore: '8.4/10', Weight: '20%', Evaluations: obs.length },
-        { Criterion: 'Student Engagement & Interaction', AverageScore: '8.7/10', Weight: '20%', Evaluations: obs.length },
-        { Criterion: 'Classroom & Time Management', AverageScore: '8.2/10', Weight: '15%', Evaluations: obs.length },
-      ],
-    };
-  },
-
-  // Legacy instructor portal helper
-  getInstructorPortalData: async () => {
-    const user = db.getCurrentUser();
-    const inst = db.getInstructors().find((i) => i.userId === user.id) || db.getInstructors()[0];
-    const details = db.getInstructorById(inst.id);
-    return {
-      instructor: inst,
-      stats: {
-        numberObservations: details?.observations.length || 0,
-        averageScore: inst.averageScore,
-        highestScore: details?.observations ? Math.max(...details.observations.map((o) => o.percentageScore), inst.averageScore) : inst.averageScore,
-        lowestScore: details?.observations ? Math.min(...details.observations.map((o) => o.percentageScore), inst.averageScore) : inst.averageScore,
-        lastObservationDate: inst.lastObservedAt || null,
-        status: inst.status,
-      },
-      observations: details?.observations || [],
-    };
-  },
-
-  // Template Lifecycle
+  deleteTemplate: async (id: string) => db.deleteTemplate(id),
   bumpTemplateVersion: async (templateId: string, data: { versionNumber: string; changeLog: string; criteria: any[] }) => {
     return { id: `ver-${Date.now()}`, templateId, ...data };
   },
@@ -1082,7 +1347,136 @@ export const api = {
   toggleTemplateStatus: async (templateId: string, isActive: boolean) => true,
   archiveTemplate: async (templateId: string, isArchived: boolean) => true,
 
-  // Notification helpers
+  // Dashboard
+  getDashboardAnalytics: async (trackId?: string) => db.getDashboardAnalytics(trackId),
+
+  // KPI Management
+  getKpiDefinitions: async () => db.getKpiDefinitions(),
+  createKpiDefinition: async (data: Partial<KpiDefinition>) => db.createKpiDefinition(data),
+  updateKpiDefinition: async (id: string, updates: Partial<KpiDefinition>) => db.updateKpiDefinition(id, updates),
+  deleteKpiDefinition: async (id: string) => db.deleteKpiDefinition(id),
+  getKpiScorecards: async () => db.getKpiScorecards(),
+  getKpiHistory: async () => db.getKpiHistory(),
+
+  // Coaching & Improvement
+  getCoachingSessions: async () => db.getCoachingSessions(),
+  createCoachingSession: async (data: any) => db.createCoachingSession(data),
+  updateCoachingSession: async (id: string, updates: Partial<CoachingSession>) => db.updateCoachingSession(id, updates),
+  deleteCoachingSession: async (id: string) => db.deleteCoachingSession(id),
+
+  getImprovementPlans: async () => db.getImprovementPlans(),
+  createImprovementPlan: async (data: any) => db.createImprovementPlan(data),
+  updateImprovementPlan: async (id: string, updates: Partial<InstructorImprovementPlan>) =>
+    db.updateImprovementPlan(id, updates),
+  deleteImprovementPlan: async (id: string) => db.deleteImprovementPlan(id),
+
+  // Student Feedback & Quality Metrics
+  getStudentFeedback: async () => db.getStudentFeedback(),
+  createStudentFeedback: async (data: any) => db.createStudentFeedback(data),
+  deleteStudentFeedback: async (id: string) => db.deleteStudentFeedback(id),
+  getQualityMetrics: async () => db.getQualityMetrics(),
+
+  // Audit Logs
+  getAuditLogs: async () => db.getAuditLogs(),
+
+  // Reports
+  getReportData: async (reportType: string, filters?: { trackId?: string; startDate?: string; endDate?: string }) => {
+    const obs = db.getObservations(filters || {}).items;
+    const insts = db.getInstructors(filters?.trackId ? { trackId: filters.trackId } : undefined);
+
+    if (reportType === 'INSTRUCTOR_PERFORMANCE') {
+      return {
+        data: insts.map((i) => ({
+          InstructorName: i.user?.name || i.title,
+          Track: i.track?.name || 'Academic Track',
+          EmployeeId: i.employeeId,
+          TotalObserved: i.totalObserved,
+          AverageScore: `${i.averageScore.toFixed(1)}%`,
+          ClassificationTier: i.tier || getTierFromScore(i.averageScore),
+          Status: i.status,
+        })),
+      };
+    }
+
+    if (reportType === 'MONTHLY_OBSERVATIONS') {
+      return {
+        data: obs.length > 0
+          ? [
+              {
+                Month: 'Current Academic Term',
+                TechnicalCount: obs.filter((o) => o.type === 'TECHNICAL').length,
+                PedagogicalCount: obs.filter((o) => o.type === 'NON_TECHNICAL').length,
+                TotalCount: obs.length,
+                AverageScore: `${(obs.reduce((s, o) => s + o.percentageScore, 0) / obs.length).toFixed(1)}%`,
+              },
+            ]
+          : [],
+      };
+    }
+
+    if (reportType === 'CRITERIA_ANALYSIS') {
+      return {
+        data: obs.length > 0
+          ? [
+              { Criterion: 'Technical Knowledge & Architecture', AverageScore: '9.1/10', Weight: '25%', Evaluations: obs.length },
+              { Criterion: 'Content Accuracy & Code Quality', AverageScore: '8.6/10', Weight: '20%', Evaluations: obs.length },
+              { Criterion: 'Live Demonstration & Problem Solving', AverageScore: '8.4/10', Weight: '20%', Evaluations: obs.length },
+              { Criterion: 'Student Engagement & Interaction', AverageScore: '8.7/10', Weight: '20%', Evaluations: obs.length },
+              { Criterion: 'Classroom & Time Management', AverageScore: '8.2/10', Weight: '15%', Evaluations: obs.length },
+            ]
+          : [],
+      };
+    }
+
+    return { data: [] };
+  },
+
+  // Instructor Portal
+  getInstructorPortalData: async () => {
+    const user = db.getCurrentUser();
+    const inst = db.getInstructors().find((i) => i.userId === user.id) || db.getInstructors()[0];
+    if (!inst) {
+      return {
+        instructor: null,
+        stats: {
+          numberObservations: 0,
+          averageScore: 0,
+          highestScore: 0,
+          lowestScore: 0,
+          lastObservationDate: null,
+          status: 'ACTIVE' as const,
+        },
+        observations: [],
+      };
+    }
+    const details = db.getInstructorById(inst.id);
+    return {
+      instructor: inst,
+      stats: {
+        numberObservations: details?.observations.length || 0,
+        averageScore: inst.averageScore,
+        highestScore:
+          details?.observations && details.observations.length > 0
+            ? Math.max(...details.observations.map((o) => o.percentageScore))
+            : inst.averageScore,
+        lowestScore:
+          details?.observations && details.observations.length > 0
+            ? Math.min(...details.observations.map((o) => o.percentageScore))
+            : inst.averageScore,
+        lastObservationDate: inst.lastObservedAt || null,
+        status: inst.status,
+      },
+      observations: details?.observations || [],
+    };
+  },
+
+  // Notifications
+  getNotifications: async (): Promise<Notification[]> => [],
   markNotificationRead: async (id: string) => true,
   markAllNotificationsRead: async () => true,
+
+  // Full System Reset
+  resetSystemData: async () => {
+    return db.resetSystemData();
+  },
 };

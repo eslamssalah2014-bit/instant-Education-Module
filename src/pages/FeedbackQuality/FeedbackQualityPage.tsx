@@ -68,14 +68,14 @@ export const FeedbackQualityPage: React.FC = () => {
   const avgCsat =
     feedbackList.length > 0
       ? (feedbackList.reduce((s, f) => s + f.overallRating, 0) / feedbackList.length).toFixed(2)
-      : '4.80';
+      : '0.00';
 
   const positivePercent =
     feedbackList.length > 0
       ? Math.round(
           (feedbackList.filter((f) => f.sentiment === 'POSITIVE').length / feedbackList.length) * 100
         )
-      : 85;
+      : 0;
 
   return (
     <div className="space-y-6 pb-12 animate-in fade-in duration-300">
@@ -163,6 +163,13 @@ export const FeedbackQualityPage: React.FC = () => {
       </div>
 
       {/* Feedback Feed Cards */}
+      {filtered.length === 0 && (
+        <div className="p-12 text-center rounded-xl border border-dashed border-slate-200 dark:border-slate-800 bg-white/40 dark:bg-slate-900/40">
+          <MessageSquare className="mx-auto h-10 w-10 text-slate-400 mb-2 opacity-50" />
+          <p className="font-semibold text-sm text-slate-700 dark:text-slate-300">No student feedback records found</p>
+          <p className="text-xs text-slate-400 mt-1">All student feedback and survey records have been purged in this clean environment.</p>
+        </div>
+      )}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {filtered.map((item) => (
           <div

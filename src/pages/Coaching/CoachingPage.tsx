@@ -178,6 +178,13 @@ export const CoachingPage: React.FC = () => {
       {/* Tab 1: Sessions */}
       {activeTab === 'sessions' && (
         <div className="space-y-4">
+          {coachingSessions.length === 0 && (
+            <div className="p-12 text-center rounded-xl border border-dashed border-slate-200 dark:border-slate-800 bg-white/40 dark:bg-slate-900/40">
+              <Users2 className="mx-auto h-10 w-10 text-slate-400 mb-2 opacity-50" />
+              <p className="font-semibold text-sm text-slate-700 dark:text-slate-300">No active coaching sessions</p>
+              <p className="text-xs text-slate-400 mt-1">All coaching records have been reset. Click "Schedule Coaching Session" to schedule a session.</p>
+            </div>
+          )}
           {coachingSessions.map((s) => (
             <div
               key={s.id}
@@ -270,6 +277,13 @@ export const CoachingPage: React.FC = () => {
       {/* Tab 2: Improvement Plans */}
       {activeTab === 'pips' && (
         <div className="space-y-4">
+          {improvementPlans.length === 0 && (
+            <div className="p-12 text-center rounded-xl border border-dashed border-amber-200 dark:border-amber-900/60 bg-amber-50/10 dark:bg-amber-950/5">
+              <AlertTriangle className="mx-auto h-10 w-10 text-amber-500 mb-2 opacity-50" />
+              <p className="font-semibold text-sm text-slate-700 dark:text-slate-300">No active performance improvement plans</p>
+              <p className="text-xs text-slate-400 mt-1">There are currently no instructors assigned to an improvement plan (PIP).</p>
+            </div>
+          )}
           {improvementPlans.map((p) => (
             <div
               key={p.id}
