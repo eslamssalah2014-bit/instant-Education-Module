@@ -62,10 +62,12 @@ model Track {
 model Instructor {
   id             String           @id @default(uuid())
   userId         String           @unique
-  employeeId     String           @unique
+  employeeId     String           @unique // Unique Teacher Code (e.g. INS-0001)
   trackId        String
   title          String
   specialization String
+  phone          String?
+  employmentType String?          @default("FULL_TIME")
   hireDate       DateTime         @default(now())
   status         InstructorStatus @default(ACTIVE)
   averageScore   Float            @default(0.0)
@@ -80,15 +82,19 @@ model Instructor {
 
   @@index([trackId])
   @@index([status])
+  @@index([employeeId])
 }
 
 model Group {
   id           String        @id @default(uuid())
   name         String
-  code         String        @unique
+  code         String        @unique // Unique Group Code (e.g. GRP-001)
   trackId      String
   instructorId String
   term         String        @default("Q4 2026")
+  startDate    DateTime?
+  endDate      DateTime?
+  status       String        @default("ACTIVE")
   studentCount Int           @default(24)
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
@@ -98,6 +104,7 @@ model Group {
 
   @@index([trackId])
   @@index([instructorId])
+  @@index([code])
 }
 
 model ObservationTemplate {

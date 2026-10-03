@@ -52,9 +52,11 @@ interface ActionPlanDraft {
 
 export const CreateObservationPage: React.FC<{
   editingObservation?: Observation | null;
+  initialTeacherId?: string;
+  initialGroupId?: string;
   onObservationCreated: (obsId: string) => void;
   onCancel?: () => void;
-}> = ({ editingObservation, onObservationCreated, onCancel }) => {
+}> = ({ editingObservation, initialTeacherId, initialGroupId, onObservationCreated, onCancel }) => {
   const { currentUser, canCreateObservation, isHeadOfTrack } = useAuth();
 
   const isEditMode = Boolean(editingObservation);
@@ -65,10 +67,10 @@ export const CreateObservationPage: React.FC<{
 
   // Form Fields
   const [selectedInstructorId, setSelectedInstructorId] = useState<string>(
-    editingObservation?.instructorId || ''
+    editingObservation?.instructorId || initialTeacherId || ''
   );
   const [selectedGroupId, setSelectedGroupId] = useState<string>(
-    editingObservation?.groupId || ''
+    editingObservation?.groupId || initialGroupId || ''
   );
   const [observationType, setObservationType] = useState<ObservationType>(
     editingObservation?.type || 'TECHNICAL'
@@ -119,7 +121,9 @@ export const CreateObservationPage: React.FC<{
       try {
         const list = await api.getInstructors();
         setInstructors(list);
-        if (!selectedInstructorId && list.length > 0) {
+        if (initialTeacherId && list.some((i) => i.id === initialTeacherId)) {
+          setSelectedInstructorId(initialTeacherId);
+        } else if (!selectedInstructorId && list.length > 0) {
           setSelectedInstructorId(list[0].id);
         }
       } catch (err) {
@@ -127,7 +131,7 @@ export const CreateObservationPage: React.FC<{
       }
     };
     loadInstructors();
-  }, [currentUser]);
+  }, [currentUser, initialTeacherId]);
 
   // 2. Auto-load groups assigned to selected instructor
   useEffect(() => {
@@ -143,10 +147,10 @@ export const CreateObservationPage: React.FC<{
         const instructorGroups = meta.groups.filter((g) => g.instructorId === selectedInstructorId);
         setAssignedGroups(instructorGroups);
 
-        if (!selectedGroupId && instructorGroups.length > 0) {
-          setSelectedGroupId(instructorGroups[0].id);
-        } else if (instructorGroups.length === 0) {
-          setSelectedGroupId('');
+        if (initialGroupId && instructorGroups.some((g) => g.id === initialGroupId)) {
+          setSelectedGroupId(initialGroupId);
+        } else if (!selectedGroupId || !instructorGroups.some((g) => g.id === selectedGroupId)) {
+          setSelectedGroupId(instructorGroups.length > 0 ? instructorGroups[0].id : '');
         }
       } catch (err) {
         console.error('Failed to load instructor groups:', err);
@@ -154,7 +158,7 @@ export const CreateObservationPage: React.FC<{
     };
 
     loadGroups();
-  }, [selectedInstructorId]);
+  }, [selectedInstructorId, initialGroupId]);
 
   // 3. Load Template & Hierarchical Criteria for Selected Type
   useEffect(() => {
@@ -537,65 +541,78 @@ export const CreateObservationPage: React.FC<{
       )}
 
       <form onSubmit={(e) => handleSubmit(e, 'SUBMITTED')} className="space-y-6">
-        {/* Section 1: Session Meta Information */}
+        {/* Section 1: Session Meta Information & Smart Filtering */}
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-4">
-          <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-            <GraduationCap className="h-4 w-4 text-indigo-600" />
-            Observation Session Information
-          </h3>
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3 dark:border-slate-800">
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <GraduationCap className="h-4 w-4 text-indigo-600" />
+              Observation Session Information & Teacher Alignment
+            </h3>
+            <span className="text-[11px] font-semibold text-slate-400">
+              Workflow: Teacher → Assigned Group → Template
+            </span>
+          </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            {/* Instructor */}
+            {/* Step 1: Select Teacher */}
             <div>
-              <label className="text-xs font-bold text-slate-700 dark:text-slate-300">Instructor *</label>
+              <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                1. Select Teacher *
+              </label>
               <select
                 value={selectedInstructorId}
                 onChange={(e) => setSelectedInstructorId(e.target.value)}
                 required
                 className="w-full mt-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
               >
-                <option value="">Select Instructor...</option>
+                <option value="">Select Faculty Teacher...</option>
                 {instructors.map((ins) => (
                   <option key={ins.id} value={ins.id}>
-                    {ins.user?.name || ins.title} ({ins.employeeId}) • {ins.track?.name}
+                    {ins.user?.name || ins.title} ({ins.employeeId || ins.teacherCode})
                   </option>
                 ))}
               </select>
             </div>
 
-            {/* Student Cohort Group */}
+            {/* Step 2: Select Group (Strictly Assigned Groups) */}
             <div>
-              <label className="text-xs font-bold text-slate-700 dark:text-slate-300">Cohort Group *</label>
+              <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                2. Select Group (Assigned Only) *
+              </label>
               <select
                 value={selectedGroupId}
                 onChange={(e) => setSelectedGroupId(e.target.value)}
                 required
-                className="w-full mt-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                disabled={assignedGroups.length === 0}
+                className="w-full mt-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
               >
-                <option value="">Select Cohort Group...</option>
-                {assignedGroups.map((grp) => (
-                  <option key={grp.id} value={grp.id}>
-                    {grp.name} ({grp.code})
-                  </option>
-                ))}
+                {assignedGroups.length === 0 ? (
+                  <option value="">No Groups Assigned to Teacher</option>
+                ) : (
+                  <>
+                    <option value="">Select Assigned Cohort...</option>
+                    {assignedGroups.map((grp) => (
+                      <option key={grp.id} value={grp.id}>
+                        {grp.name} ({grp.code})
+                      </option>
+                    ))}
+                  </>
+                )}
               </select>
-              {assignedGroups.length === 0 && selectedInstructorId && (
-                <span className="text-[11px] text-amber-600 dark:text-amber-400 mt-1 block">
-                  No active student groups assigned to this instructor.
-                </span>
-              )}
             </div>
 
-            {/* Observation Type */}
+            {/* Step 3: Observation Type */}
             <div>
-              <label className="text-xs font-bold text-slate-700 dark:text-slate-300">Audit Type</label>
+              <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                3. Observation Template *
+              </label>
               <select
                 value={observationType}
                 onChange={(e) => setObservationType(e.target.value as ObservationType)}
                 className="w-full mt-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
               >
-                <option value="TECHNICAL">Technical Audit</option>
-                <option value="NON_TECHNICAL">Pedagogical / Non-Technical Audit</option>
+                <option value="TECHNICAL">Technical Audit Template</option>
+                <option value="NON_TECHNICAL">Pedagogical / Non-Technical Audit Template</option>
               </select>
             </div>
 
@@ -613,6 +630,107 @@ export const CreateObservationPage: React.FC<{
               </div>
             </div>
           </div>
+
+          {/* Smart Filtering Intelligence Banner */}
+          {(() => {
+            const currentInst = instructors.find((i) => i.id === selectedInstructorId);
+            if (!currentInst) return null;
+
+            return (
+              <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-3.5 dark:border-indigo-950 dark:bg-indigo-950/20 animate-in fade-in">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  {/* Teacher Meta Details */}
+                  <div className="flex flex-wrap items-center gap-4">
+                    <div>
+                      <span className="text-[10px] uppercase font-bold text-slate-400 block">
+                        Academic Track
+                      </span>
+                      <span className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5 mt-0.5">
+                        <span
+                          className="h-2 w-2 rounded-full"
+                          style={{ backgroundColor: currentInst.track?.color || '#4f46e5' }}
+                        />
+                        {currentInst.track?.name || 'Academic Track'}
+                      </span>
+                    </div>
+
+                    <div className="border-l border-slate-200 dark:border-slate-800 pl-4">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 block">
+                        Teacher Code
+                      </span>
+                      <span className="font-mono text-xs font-bold text-indigo-600 dark:text-indigo-400 mt-0.5 block">
+                        {currentInst.employeeId || currentInst.teacherCode}
+                      </span>
+                    </div>
+
+                    <div className="border-l border-slate-200 dark:border-slate-800 pl-4">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 block">
+                        Current Classification
+                      </span>
+                      <div className="flex items-center gap-1.5 mt-0.5">
+                        <span
+                          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold border ${getTierBadgeClass(
+                            currentInst.tier || getTierFromScore(currentInst.averageScore)
+                          )}`}
+                        >
+                          <Award className="h-3 w-3" />
+                          Tier {currentInst.tier || getTierFromScore(currentInst.averageScore)}
+                        </span>
+                        <span className="font-mono text-xs font-bold text-slate-700 dark:text-slate-300">
+                          {currentInst.averageScore.toFixed(1)}%
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="border-l border-slate-200 dark:border-slate-800 pl-4">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 block">
+                        Audit History
+                      </span>
+                      <span className="text-xs font-semibold text-slate-800 dark:text-slate-200 mt-0.5 block">
+                        {currentInst.totalObserved} audits conducted
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Assigned Groups Tag Pills */}
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] uppercase font-bold text-slate-400">
+                      Assigned Cohorts ({assignedGroups.length}):
+                    </span>
+                    <div className="flex flex-wrap gap-1">
+                      {assignedGroups.length === 0 ? (
+                        <span className="text-xs font-semibold text-amber-600 dark:text-amber-400 italic">
+                          No groups assigned
+                        </span>
+                      ) : (
+                        assignedGroups.map((g) => (
+                          <span
+                            key={g.id}
+                            className={`rounded-md px-2 py-0.5 text-[11px] font-semibold transition ${
+                              selectedGroupId === g.id
+                                ? 'bg-indigo-600 text-white shadow-sm'
+                                : 'bg-white border border-slate-200 text-slate-700 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300'
+                            }`}
+                          >
+                            {g.name}
+                          </span>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {assignedGroups.length === 0 && (
+                  <div className="mt-2.5 flex items-center gap-2 text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 p-2 rounded-lg border border-amber-200 dark:border-amber-900/40">
+                    <AlertCircle className="h-4 w-4 shrink-0 text-amber-600" />
+                    <span>
+                      Notice: This instructor has no assigned student groups. Please create or assign a group to {currentInst.user?.name || currentInst.title} before conducting this audit.
+                    </span>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </div>
 
         {/* Section 2: Hierarchical Rubric Scoring */}

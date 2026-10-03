@@ -13,6 +13,7 @@ import {
   Target,
   Sparkles,
   MessageSquare,
+  Layers,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
@@ -46,10 +47,17 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, isOpe
     },
     {
       id: 'instructors',
-      label: 'Faculty & Instructors',
+      label: 'Teachers & Faculty',
       icon: Users2,
       show: isEducationManager || isHeadOfTrack || isQaTeam,
-      badge: 'Tiers',
+      badge: 'Imports',
+    },
+    {
+      id: 'groups',
+      label: 'Cohort Groups',
+      icon: Layers,
+      show: isEducationManager || isHeadOfTrack || isQaTeam,
+      badge: 'Cohorts',
     },
     {
       id: 'observations',

@@ -22,16 +22,36 @@ import {
   CheckCircle2,
   Clock,
   ExternalLink,
+  Upload,
+  FileSpreadsheet,
+  FileDown,
+  AlertCircle,
+  RefreshCw,
 } from 'lucide-react';
 import { api } from '../../services/api';
-import { Instructor, Track, InstructorTier, getTierBadgeClass, Observation, KpiScorecard, CoachingSession, InstructorImprovementPlan, StudentFeedbackRecord } from '../../types';
+import {
+  Instructor,
+  Track,
+  InstructorTier,
+  getTierBadgeClass,
+  Observation,
+  KpiScorecard,
+  CoachingSession,
+  InstructorImprovementPlan,
+  StudentFeedbackRecord,
+  TeacherImportRow,
+  ImportValidationResult,
+} from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { ObservationDetailsModal } from '../Observations/ObservationDetailsModal';
+import { downloadTeachersImportTemplate, parseExcelFile } from '../../utils/importTemplates';
 
 export const InstructorsPage: React.FC<{
   onNavigateToObservation?: (instructorId: string) => void;
-}> = ({ onNavigateToObservation }) => {
+  onNavigateToGroups?: (teacherId?: string) => void;
+}> = ({ onNavigateToObservation, onNavigateToGroups }) => {
   const { currentUser, isEducationManager, isHeadOfTrack, isQaTeam } = useAuth();
+  const canManage = isEducationManager || isHeadOfTrack || isQaTeam;
 
   const [instructors, setInstructors] = useState<Instructor[]>([]);
   const [tracks, setTracks] = useState<Track[]>([]);
@@ -40,6 +60,36 @@ export const InstructorsPage: React.FC<{
   const [selectedTier, setSelectedTier] = useState<string>('');
   const [selectedStatus, setSelectedStatus] = useState<string>('');
   const [isLoading, setIsLoading] = useState(true);
+
+  // Modals state
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [addFormData, setAddFormData] = useState({
+    name: '',
+    email: '',
+    phone: '',
+    teacherCode: '',
+    trackId: '',
+    employmentType: 'FULL_TIME',
+    status: 'ACTIVE' as const,
+  });
+  const [addFormError, setAddFormError] = useState<string | null>(null);
+  const [isSavingTeacher, setIsSavingTeacher] = useState(false);
+
+  // Bulk Import state
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [isParsing, setIsParsing] = useState(false);
+  const [validationResult, setValidationResult] = useState<ImportValidationResult<TeacherImportRow> | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importSuccessMsg, setImportSuccessMsg] = useState<string | null>(null);
+
+  // Toast feedback
+  const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const showToast = (type: 'success' | 'error', text: string) => {
+    setToastMessage({ type, text });
+    setTimeout(() => setToastMessage(null), 4000);
+  };
 
   // Selected instructor for detailed profile modal/drawer
   const [selectedInstructorId, setSelectedInstructorId] = useState<string | null>(null);
@@ -100,6 +150,100 @@ export const InstructorsPage: React.FC<{
     setInstructorProfile(null);
   };
 
+  const handleOpenAddTeacher = () => {
+    const suggestedCode = api.generateTeacherCode();
+    setAddFormData({
+      name: '',
+      email: '',
+      phone: '',
+      teacherCode: suggestedCode,
+      trackId: tracks[0]?.id || '',
+      employmentType: 'FULL_TIME',
+      status: 'ACTIVE',
+    });
+    setAddFormError(null);
+    setShowAddModal(true);
+  };
+
+  const handleSaveTeacher = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!addFormData.name.trim()) {
+      setAddFormError('Teacher Name is required.');
+      return;
+    }
+    if (!addFormData.email.trim()) {
+      setAddFormError('Email address is required.');
+      return;
+    }
+    if (!addFormData.trackId) {
+      setAddFormError('Academic Track is required.');
+      return;
+    }
+
+    try {
+      setIsSavingTeacher(true);
+      setAddFormError(null);
+      await api.createInstructor({
+        name: addFormData.name.trim(),
+        email: addFormData.email.trim(),
+        phone: addFormData.phone.trim(),
+        teacherCode: addFormData.teacherCode.trim(),
+        trackId: addFormData.trackId,
+        employmentType: addFormData.employmentType,
+        status: addFormData.status,
+      });
+      showToast('success', `Teacher "${addFormData.name}" added successfully.`);
+      setShowAddModal(false);
+      fetchInstructors();
+    } catch (err: any) {
+      setAddFormError(err.message || 'Failed to create instructor.');
+    } finally {
+      setIsSavingTeacher(false);
+    }
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setImportFile(file);
+    setIsParsing(true);
+    setValidationResult(null);
+    setImportSuccessMsg(null);
+
+    try {
+      const parsedRows = await parseExcelFile(file);
+      const validation = await api.validateTeacherImport(parsedRows);
+      setValidationResult(validation);
+    } catch (err: any) {
+      alert(`Error parsing Excel file: ${err.message}`);
+    } finally {
+      setIsParsing(false);
+    }
+  };
+
+  const handleExecuteImport = async () => {
+    if (!validationResult || validationResult.validRows.length === 0) return;
+
+    try {
+      setIsImporting(true);
+      const imported = await api.importTeachers(validationResult.validRows);
+      setImportSuccessMsg(`Successfully imported ${imported.length} teachers!`);
+      showToast('success', `Successfully imported ${imported.length} teachers.`);
+      fetchInstructors();
+      setTimeout(() => {
+        setShowImportModal(false);
+        setImportFile(null);
+        setValidationResult(null);
+        setImportSuccessMsg(null);
+      }, 1500);
+    } catch (err: any) {
+      alert(`Import failed: ${err.message}`);
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
   // Stats calculation
   const totalInst = instructors.length;
   const eliteCount = instructors.filter((i) => i.tier === 'A+').length;
@@ -108,6 +252,24 @@ export const InstructorsPage: React.FC<{
 
   return (
     <div className="space-y-6 pb-12 animate-in fade-in duration-300">
+      {/* Toast Feedback */}
+      {toastMessage && (
+        <div
+          className={`fixed top-4 right-4 z-50 flex items-center gap-2.5 rounded-xl px-4 py-3 text-sm font-semibold shadow-xl border animate-in slide-in-from-top-2 ${
+            toastMessage.type === 'success'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-950 dark:border-emerald-900 dark:text-emerald-200'
+              : 'bg-rose-50 border-rose-200 text-rose-800 dark:bg-rose-950 dark:border-rose-900 dark:text-rose-200'
+          }`}
+        >
+          {toastMessage.type === 'success' ? (
+            <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+          ) : (
+            <AlertCircle className="h-5 w-5 text-rose-600" />
+          )}
+          <span>{toastMessage.text}</span>
+        </div>
+      )}
+
       {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-slate-200 pb-5 dark:border-slate-800">
         <div>
@@ -116,8 +278,44 @@ export const InstructorsPage: React.FC<{
             Instructor Management & Performance
           </h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-            Monitor academic staff performance, classification tiers (A+, A, B+, B), observation history, and individual coaching plans.
+            Monitor academic staff performance, classification tiers (A+, A, B+, B), assigned groups, and bulk import teachers via Excel.
           </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2.5">
+          <button
+            onClick={downloadTeachersImportTemplate}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200"
+            title="Download Excel Template"
+          >
+            <FileDown className="h-4 w-4 text-emerald-600" />
+            <span>Teachers Template.xlsx</span>
+          </button>
+
+          {canManage && (
+            <>
+              <button
+                onClick={() => {
+                  setImportFile(null);
+                  setValidationResult(null);
+                  setImportSuccessMsg(null);
+                  setShowImportModal(true);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-indigo-200 bg-indigo-50 px-3.5 py-2 text-xs font-bold text-indigo-700 transition hover:bg-indigo-100 dark:border-indigo-900 dark:bg-indigo-950/60 dark:text-indigo-300"
+              >
+                <Upload className="h-4 w-4 text-indigo-600" />
+                <span>Bulk Import Teachers</span>
+              </button>
+
+              <button
+                onClick={handleOpenAddTeacher}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-indigo-700 focus:outline-none"
+              >
+                <Plus className="h-4 w-4" />
+                <span>Add Teacher</span>
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -256,22 +454,24 @@ export const InstructorsPage: React.FC<{
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50/80 text-xs font-semibold uppercase tracking-wider text-slate-500 dark:border-slate-800 dark:bg-slate-800/40 dark:text-slate-400">
-                <th className="px-6 py-3.5">Instructor</th>
-                <th className="px-6 py-3.5">Track & Title</th>
-                <th className="px-6 py-3.5">Classification Tier</th>
-                <th className="px-6 py-3.5">Average Score</th>
-                <th className="px-6 py-3.5">Observations</th>
-                <th className="px-6 py-3.5">Status</th>
-                <th className="px-6 py-3.5 text-right">Actions</th>
+                <th className="px-5 py-3.5">Teacher Code</th>
+                <th className="px-5 py-3.5">Instructor & Contacts</th>
+                <th className="px-5 py-3.5">Track & Role</th>
+                <th className="px-5 py-3.5">Assigned Groups</th>
+                <th className="px-5 py-3.5">Classification Tier</th>
+                <th className="px-5 py-3.5">Average Score</th>
+                <th className="px-5 py-3.5">Observations</th>
+                <th className="px-5 py-3.5">Status</th>
+                <th className="px-5 py-3.5 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800 text-sm">
               {instructors.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-6 py-12 text-center text-slate-500 dark:text-slate-400">
+                  <td colSpan={9} className="px-6 py-12 text-center text-slate-500 dark:text-slate-400">
                     <GraduationCap className="mx-auto h-10 w-10 text-slate-400 mb-2 opacity-50" />
                     <p className="font-medium text-base text-slate-700 dark:text-slate-300">No instructors found</p>
-                    <p className="text-xs text-slate-400 mt-1">All instructor records have been deleted in this clean environment.</p>
+                    <p className="text-xs text-slate-400 mt-1">Get started by clicking "Add Teacher" or "Bulk Import Teachers".</p>
                   </td>
                 </tr>
               )}
@@ -282,7 +482,13 @@ export const InstructorsPage: React.FC<{
                     key={ins.id}
                     className="hover:bg-slate-50/80 transition-colors dark:hover:bg-slate-800/40"
                   >
-                    <td className="px-6 py-4">
+                    {/* Teacher Code */}
+                    <td className="px-5 py-4 font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                      {ins.employeeId || ins.teacherCode}
+                    </td>
+
+                    {/* Instructor & Contacts */}
+                    <td className="px-5 py-4">
                       <div className="flex items-center gap-3">
                         <img
                           src={
@@ -290,29 +496,48 @@ export const InstructorsPage: React.FC<{
                             `https://ui-avatars.com/api/?name=${encodeURIComponent(ins.user?.name || ins.title)}&background=6366f1&color=fff`
                           }
                           alt={ins.user?.name}
-                          className="h-10 w-10 rounded-full object-cover ring-2 ring-indigo-500/20"
+                          className="h-9 w-9 rounded-full object-cover ring-2 ring-indigo-500/20"
                         />
                         <div>
                           <div className="font-semibold text-slate-900 dark:text-white">
                             {ins.user?.name || ins.title}
                           </div>
                           <div className="text-xs text-slate-500 dark:text-slate-400">
-                            {ins.employeeId} • {ins.user?.email}
+                            {ins.user?.email || ins.email}
+                            {(ins.phone || ins.user?.phone) && (
+                              <span className="ml-1.5 text-slate-400">• {ins.phone || ins.user?.phone}</span>
+                            )}
                           </div>
                         </div>
                       </div>
                     </td>
 
-                    <td className="px-6 py-4">
+                    {/* Track & Role */}
+                    <td className="px-5 py-4">
                       <div className="font-medium text-slate-800 dark:text-slate-200">
                         {ins.track?.name || 'Academic Track'}
                       </div>
-                      <div className="text-xs text-slate-500 dark:text-slate-400 truncate max-w-xs">
-                        {ins.specialization}
+                      <div className="text-xs text-slate-500 dark:text-slate-400">
+                        {ins.employmentType ? ins.employmentType.replace(/_/g, ' ') : 'Full Time'} • {ins.specialization}
                       </div>
                     </td>
 
-                    <td className="px-6 py-4">
+                    {/* Assigned Groups */}
+                    <td className="px-5 py-4">
+                      <span
+                        className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                          (ins.groupsCount || 0) > 0
+                            ? 'bg-purple-50 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300'
+                            : 'bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300'
+                        }`}
+                      >
+                        <Layers className="h-3 w-3" />
+                        {ins.groupsCount || 0} {(ins.groupsCount === 1) ? 'Group' : 'Groups'}
+                      </span>
+                    </td>
+
+                    {/* Classification Tier */}
+                    <td className="px-5 py-4">
                       <span
                         className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-bold border ${getTierBadgeClass(
                           tier
@@ -323,7 +548,8 @@ export const InstructorsPage: React.FC<{
                       </span>
                     </td>
 
-                    <td className="px-6 py-4">
+                    {/* Average Score */}
+                    <td className="px-5 py-4">
                       <div className="flex items-center gap-2">
                         <span className="font-mono text-base font-bold text-slate-900 dark:text-white">
                           {ins.averageScore.toFixed(1)}%
@@ -345,7 +571,8 @@ export const InstructorsPage: React.FC<{
                       </div>
                     </td>
 
-                    <td className="px-6 py-4">
+                    {/* Observations */}
+                    <td className="px-5 py-4">
                       <div className="text-slate-900 dark:text-white font-medium">
                         {ins.totalObserved} sessions
                       </div>
@@ -354,7 +581,8 @@ export const InstructorsPage: React.FC<{
                       </div>
                     </td>
 
-                    <td className="px-6 py-4">
+                    {/* Status */}
+                    <td className="px-5 py-4">
                       <span
                         className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
                           ins.status === 'ACTIVE'
@@ -368,14 +596,25 @@ export const InstructorsPage: React.FC<{
                       </span>
                     </td>
 
-                    <td className="px-6 py-4 text-right">
-                      <div className="flex items-center justify-end gap-2">
+                    {/* Actions */}
+                    <td className="px-5 py-4 text-right">
+                      <div className="flex items-center justify-end gap-1.5">
+                        {onNavigateToObservation && (
+                          <button
+                            onClick={() => onNavigateToObservation(ins.id)}
+                            className="inline-flex items-center gap-1 rounded-lg bg-indigo-50 px-2.5 py-1 text-xs font-bold text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-950 dark:text-indigo-300"
+                            title="Conduct observation audit"
+                          >
+                            <ClipboardList className="h-3.5 w-3.5" />
+                            Audit
+                          </button>
+                        )}
                         <button
                           onClick={() => openProfile(ins.id)}
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-indigo-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-750 shadow-sm transition-colors"
+                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
                         >
-                          View Profile
-                          <ChevronRight className="h-3.5 w-3.5" />
+                          Profile
+                          <ChevronRight className="h-3 w-3" />
                         </button>
                       </div>
                     </td>
@@ -790,6 +1029,369 @@ export const InstructorsPage: React.FC<{
           observation={inspectObservation}
           onClose={() => setInspectObservation(null)}
         />
+      )}
+
+      {/* ADD SINGLE TEACHER MODAL */}
+      {showAddModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex items-center justify-between border-b border-slate-200 pb-3 dark:border-slate-800">
+              <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <GraduationCap className="h-5 w-5 text-indigo-600" />
+                Add New Faculty Teacher
+              </h3>
+              <button
+                onClick={() => setShowAddModal(false)}
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {addFormError && (
+              <div className="mt-3 flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800 dark:border-rose-900 dark:bg-rose-950 dark:text-rose-200">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>{addFormError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleSaveTeacher} className="mt-4 space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                    Teacher Code
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. INS-0001"
+                    value={addFormData.teacherCode}
+                    onChange={(e) => setAddFormData({ ...addFormData, teacherCode: e.target.value })}
+                    className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-mono font-bold text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <span className="text-[10px] text-slate-400">Auto-suggested sequentially</span>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                    Full Name *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Ahmed Mohamed"
+                    value={addFormData.name}
+                    onChange={(e) => setAddFormData({ ...addFormData, name: e.target.value })}
+                    className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                    Email Address *
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    placeholder="ahmed@scalora.com"
+                    value={addFormData.email}
+                    onChange={(e) => setAddFormData({ ...addFormData, email: e.target.value })}
+                    className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                    Phone Number
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="+20 100 123 4567"
+                    value={addFormData.phone}
+                    onChange={(e) => setAddFormData({ ...addFormData, phone: e.target.value })}
+                    className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div className="col-span-1">
+                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                    Track *
+                  </label>
+                  <select
+                    required
+                    value={addFormData.trackId}
+                    onChange={(e) => setAddFormData({ ...addFormData, trackId: e.target.value })}
+                    className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="">Select...</option>
+                    {tracks.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                    Employment
+                  </label>
+                  <select
+                    value={addFormData.employmentType}
+                    onChange={(e) => setAddFormData({ ...addFormData, employmentType: e.target.value })}
+                    className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white focus:outline-none"
+                  >
+                    <option value="FULL_TIME">Full Time</option>
+                    <option value="PART_TIME">Part Time</option>
+                    <option value="CONTRACT">Contract</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                    Status
+                  </label>
+                  <select
+                    value={addFormData.status}
+                    onChange={(e) => setAddFormData({ ...addFormData, status: e.target.value as any })}
+                    className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white focus:outline-none"
+                  >
+                    <option value="ACTIVE">Active</option>
+                    <option value="PROBATION">Probation</option>
+                    <option value="ON_LEAVE">On Leave</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setShowAddModal(false)}
+                  className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingTeacher}
+                  className="rounded-xl bg-indigo-600 px-5 py-2 text-xs font-bold text-white shadow-md hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  {isSavingTeacher ? 'Saving...' : 'Add Teacher'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* BULK IMPORT TEACHERS MODAL */}
+      {showImportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-3xl max-h-[90vh] flex flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-900">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-slate-200 p-5 dark:border-slate-800 shrink-0">
+              <div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                  <Upload className="h-5 w-5 text-indigo-600" />
+                  Bulk Import Teachers via Excel
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Import teachers spreadsheet with automatic code generation (e.g. INS-0001, INS-0002) and pre-import validation.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowImportModal(false)}
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="flex-1 overflow-y-auto p-5 space-y-4">
+              {/* Instructions banner */}
+              <div className="flex items-start justify-between gap-4 rounded-xl border border-indigo-100 bg-indigo-50/70 p-4 dark:border-indigo-950 dark:bg-indigo-950/30">
+                <div className="text-xs text-indigo-900 dark:text-indigo-200 space-y-1">
+                  <div className="font-bold">Required Columns:</div>
+                  <ul className="list-disc pl-4 space-y-0.5 text-indigo-800 dark:text-indigo-300 text-[11px]">
+                    <li>
+                      <strong>Teacher Name, Email, Track</strong> (Required)
+                    </li>
+                    <li>
+                      <strong>Teacher Code</strong>: Optional. If blank, system auto-generates <code>INS-0001</code>, <code>INS-0002</code>...
+                    </li>
+                    <li>Optional columns: Phone Number, Employment Type, Status.</li>
+                  </ul>
+                </div>
+                <button
+                  type="button"
+                  onClick={downloadTeachersImportTemplate}
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-bold text-indigo-700 shadow-sm hover:bg-indigo-50 dark:border-indigo-800 dark:bg-slate-800 dark:text-indigo-300"
+                >
+                  <FileDown className="h-4 w-4 text-emerald-600" />
+                  <span>Download Template</span>
+                </button>
+              </div>
+
+              {/* File upload dropzone */}
+              <div className="border-2 border-dashed border-slate-300 rounded-2xl p-6 text-center hover:border-indigo-500 transition dark:border-slate-700">
+                <input
+                  type="file"
+                  id="teacher-file-input"
+                  accept=".xlsx, .xls, .csv"
+                  onChange={handleFileChange}
+                  className="hidden"
+                />
+                <label
+                  htmlFor="teacher-file-input"
+                  className="cursor-pointer flex flex-col items-center gap-2"
+                >
+                  <FileSpreadsheet className="h-10 w-10 text-indigo-600 dark:text-indigo-400" />
+                  <span className="font-bold text-sm text-slate-800 dark:text-slate-200">
+                    {importFile ? importFile.name : 'Click to browse Excel spreadsheet'}
+                  </span>
+                  <span className="text-xs text-slate-400">
+                    Supports .xlsx, .xls, and .csv files
+                  </span>
+                </label>
+              </div>
+
+              {/* Parsing Indicator */}
+              {isParsing && (
+                <div className="flex items-center justify-center gap-2 py-4 text-xs font-semibold text-slate-500">
+                  <RefreshCw className="h-4 w-4 animate-spin text-indigo-600" />
+                  Validating spreadsheet rows, emails, and codes...
+                </div>
+              )}
+
+              {/* Validation Summary */}
+              {validationResult && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between rounded-xl border p-3 bg-slate-50 dark:bg-slate-800/60">
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                        Total Rows: {validationResult.totalRows}
+                      </span>
+                      <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-600 dark:text-emerald-400">
+                        <CheckCircle2 className="h-4 w-4" />
+                        Valid: {validationResult.validCount}
+                      </span>
+                      {validationResult.errorCount > 0 && (
+                        <span className="inline-flex items-center gap-1 text-xs font-bold text-rose-600 dark:text-rose-400">
+                          <AlertCircle className="h-4 w-4" />
+                          Errors: {validationResult.errorCount}
+                        </span>
+                      )}
+                    </div>
+                    <span
+                      className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${
+                        validationResult.isValid
+                          ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                          : 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
+                      }`}
+                    >
+                      {validationResult.isValid ? '✓ All Rows Valid' : '✗ Errors Detected'}
+                    </span>
+                  </div>
+
+                  {/* Errors List */}
+                  {validationResult.errors.length > 0 && (
+                    <div className="rounded-xl border border-rose-200 bg-rose-50/50 p-3 space-y-1.5 dark:border-rose-900/60 dark:bg-rose-950/20 max-h-36 overflow-y-auto">
+                      <div className="text-xs font-bold text-rose-800 dark:text-rose-300">
+                        Validation Errors ({validationResult.errors.length}):
+                      </div>
+                      {validationResult.errors.map((err, i) => (
+                        <div key={i} className="text-[11px] text-rose-700 dark:text-rose-300 font-mono">
+                          • Row {err.row}: <strong>[{err.field}]</strong> {err.message}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Valid Rows Preview Table */}
+                  {validationResult.validRows.length > 0 && (
+                    <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800">
+                      <div className="bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                        Preview of Valid Teachers ({validationResult.validRows.length})
+                      </div>
+                      <div className="max-h-48 overflow-y-auto">
+                        <table className="w-full text-left text-xs">
+                          <thead className="bg-slate-100 dark:bg-slate-850 text-slate-600 dark:text-slate-400">
+                            <tr>
+                              <th className="py-2 px-3">Row</th>
+                              <th className="py-2 px-3">Code</th>
+                              <th className="py-2 px-3">Name</th>
+                              <th className="py-2 px-3">Email</th>
+                              <th className="py-2 px-3">Track</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono text-[11px]">
+                            {validationResult.validRows.map((r, i) => (
+                              <tr key={i} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                                <td className="py-1.5 px-3 text-slate-400">#{r.rowNumber}</td>
+                                <td className="py-1.5 px-3 font-bold text-indigo-600">
+                                  {r.teacherCode || <span className="text-slate-400 font-normal italic">[Auto-Gen]</span>}
+                                </td>
+                                <td className="py-1.5 px-3 font-sans text-slate-800 dark:text-slate-200">{r.teacherName}</td>
+                                <td className="py-1.5 px-3 text-slate-500">{r.email}</td>
+                                <td className="py-1.5 px-3 text-slate-600 dark:text-slate-400">{r.track}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {importSuccessMsg && (
+                <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs font-semibold text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200">
+                  <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+                  <span>{importSuccessMsg}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex items-center justify-between border-t border-slate-200 p-5 dark:border-slate-800 shrink-0">
+              <button
+                type="button"
+                onClick={() => setShowImportModal(false)}
+                className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300"
+              >
+                Close
+              </button>
+
+              <button
+                type="button"
+                disabled={
+                  !validationResult ||
+                  validationResult.validCount === 0 ||
+                  isImporting
+                }
+                onClick={handleExecuteImport}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-5 py-2 text-xs font-bold text-white shadow-md hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {isImporting ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                    <span>Importing...</span>
+                  </>
+                ) : (
+                  <>
+                    <Upload className="h-4 w-4" />
+                    <span>Import {validationResult?.validCount || 0} Valid Teachers</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

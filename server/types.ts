@@ -42,16 +42,21 @@ export interface Instructor {
   id: string;
   userId: string;
   user?: User;
-  employeeId: string;
+  employeeId: string; // Teacher Code
+  teacherCode?: string;
   trackId: string;
   track?: Track;
   title: string;
   specialization: string;
+  phone?: string;
+  email?: string;
+  employmentType?: string;
   hireDate: string;
   status: InstructorStatus;
   averageScore: number;
   totalObserved: number;
   lastObservedAt?: string;
+  groupsCount?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -64,7 +69,12 @@ export interface Group {
   track?: Track;
   instructorId: string;
   instructor?: Instructor;
-  term: string;
+  teacherCode?: string;
+  teacherName?: string;
+  term?: string;
+  startDate?: string;
+  endDate?: string;
+  status?: string;
   studentCount: number;
   createdAt: string;
   updatedAt: string;

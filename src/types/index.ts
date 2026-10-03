@@ -59,17 +59,23 @@ export interface Instructor {
   id: string;
   userId: string;
   user?: User;
-  employeeId: string;
+  employeeId: string; // Teacher Code (e.g. INS-0001)
+  teacherCode?: string; // Alias for employeeId
   trackId: string;
   track?: Track;
   title: string;
   specialization: string;
+  phone?: string;
+  email?: string;
+  employmentType?: 'FULL_TIME' | 'PART_TIME' | 'CONTRACT' | string;
   hireDate: string;
   status: InstructorStatus;
   averageScore: number;
   totalObserved: number;
   lastObservedAt?: string;
   tier?: InstructorTier;
+  groupsCount?: number;
+  groups?: Group[];
   createdAt: string;
   updatedAt: string;
 }
@@ -77,15 +83,58 @@ export interface Instructor {
 export interface Group {
   id: string;
   name: string;
-  code: string;
+  code: string; // e.g. GRP-001
   trackId: string;
   track?: Track;
+  trackCode?: string;
   instructorId: string;
   instructor?: Instructor;
-  term: string;
+  teacherCode?: string;
+  teacherName?: string;
+  term?: string;
+  startDate?: string;
+  endDate?: string;
+  status?: 'ACTIVE' | 'UPCOMING' | 'COMPLETED' | 'ARCHIVED';
   studentCount: number;
+  observationsCount?: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface TeacherImportRow {
+  teacherCode?: string;
+  teacherName: string;
+  email: string;
+  phone?: string;
+  track: string;
+  employmentType?: string;
+  status?: string;
+}
+
+export interface GroupImportRow {
+  groupCode: string;
+  groupName: string;
+  track: string;
+  teacherCode: string;
+  startDate?: string;
+  endDate?: string;
+  status?: string;
+}
+
+export interface ImportValidationError {
+  row: number;
+  field: string;
+  value?: any;
+  message: string;
+}
+
+export interface ImportValidationResult<T> {
+  isValid: boolean;
+  totalRows: number;
+  validCount: number;
+  errorCount: number;
+  validRows: (T & { rowNumber: number; [key: string]: any })[];
+  errors: ImportValidationError[];
 }
 
 export interface SubCriterion {
@@ -398,6 +447,14 @@ export interface DashboardAnalytics {
       a: number;
       bPlus: number;
       b: number;
+    };
+    educationWorkload?: {
+      totalTeachers: number;
+      totalGroups: number;
+      groupsPerTeacher: number;
+      observationCoveragePct: number;
+      teachersWithoutGroups: number;
+      groupsWithoutObservations: number;
     };
   };
   trackAnalytics: {

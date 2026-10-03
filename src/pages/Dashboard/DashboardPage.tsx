@@ -17,6 +17,7 @@ import {
   AlertTriangle,
   ChevronRight,
   GraduationCap,
+  Layers,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -41,7 +42,8 @@ export const DashboardPage: React.FC<{
   onNavigateToInstructors?: () => void;
   onNavigateToObservations?: () => void;
   onNavigateToCoaching?: () => void;
-}> = ({ onNavigateToInstructors, onNavigateToObservations, onNavigateToCoaching }) => {
+  onNavigateToGroups?: () => void;
+}> = ({ onNavigateToInstructors, onNavigateToObservations, onNavigateToCoaching, onNavigateToGroups }) => {
   const { currentUser, isHeadOfTrack } = useAuth();
   const [analytics, setAnalytics] = useState<DashboardAnalytics | null>(null);
   const [tracks, setTracks] = useState<Track[]>([]);
@@ -221,6 +223,79 @@ export const DashboardPage: React.FC<{
           </div>
           <div className="mt-2 text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1 font-medium group-hover:underline">
             Open Coaching Module <ChevronRight className="h-3 w-3" />
+          </div>
+        </div>
+      </div>
+
+      {/* Education Capacity & Workload Analytics (Teachers & Groups) */}
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-3">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-3 dark:border-slate-800">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <Layers className="h-4 w-4 text-indigo-600" />
+              Teacher & Group Workload Coverage
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Operational metrics for faculty staffing, group allocations, and audit coverage.
+            </p>
+          </div>
+          {onNavigateToGroups && (
+            <button
+              onClick={onNavigateToGroups}
+              className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 flex items-center gap-1"
+            >
+              Manage Groups <ChevronRight className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-850 border border-slate-100 dark:border-slate-800">
+            <span className="text-[10px] font-bold uppercase text-slate-400">Total Teachers</span>
+            <div className="mt-1 font-mono text-xl font-bold text-slate-900 dark:text-white">
+              {statsCards.educationWorkload?.totalTeachers ?? statsCards.instructorMetrics.totalActiveInstructors}
+            </div>
+            <span className="text-[10px] text-slate-500">Active faculty</span>
+          </div>
+
+          <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-850 border border-slate-100 dark:border-slate-800">
+            <span className="text-[10px] font-bold uppercase text-slate-400">Total Cohorts</span>
+            <div className="mt-1 font-mono text-xl font-bold text-indigo-600 dark:text-indigo-400">
+              {statsCards.educationWorkload?.totalGroups ?? 0}
+            </div>
+            <span className="text-[10px] text-slate-500">Student groups</span>
+          </div>
+
+          <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-850 border border-slate-100 dark:border-slate-800">
+            <span className="text-[10px] font-bold uppercase text-slate-400">Groups / Teacher</span>
+            <div className="mt-1 font-mono text-xl font-bold text-purple-600 dark:text-purple-400">
+              {statsCards.educationWorkload?.groupsPerTeacher ?? 0}
+            </div>
+            <span className="text-[10px] text-slate-500">Average load</span>
+          </div>
+
+          <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-850 border border-slate-100 dark:border-slate-800">
+            <span className="text-[10px] font-bold uppercase text-slate-400">Audit Coverage</span>
+            <div className="mt-1 font-mono text-xl font-bold text-emerald-600 dark:text-emerald-400">
+              {statsCards.educationWorkload?.observationCoveragePct ?? 0}%
+            </div>
+            <span className="text-[10px] text-slate-500">Faculty observed</span>
+          </div>
+
+          <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-850 border border-slate-100 dark:border-slate-800">
+            <span className="text-[10px] font-bold uppercase text-slate-400">Teachers w/o Groups</span>
+            <div className="mt-1 font-mono text-xl font-bold text-amber-600 dark:text-amber-400">
+              {statsCards.educationWorkload?.teachersWithoutGroups ?? 0}
+            </div>
+            <span className="text-[10px] text-slate-500">Unassigned staff</span>
+          </div>
+
+          <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-850 border border-slate-100 dark:border-slate-800">
+            <span className="text-[10px] font-bold uppercase text-slate-400">Groups w/o Audits</span>
+            <div className="mt-1 font-mono text-xl font-bold text-rose-600 dark:text-rose-400">
+              {statsCards.educationWorkload?.groupsWithoutObservations ?? 0}
+            </div>
+            <span className="text-[10px] text-slate-500">Pending audit</span>
           </div>
         </div>
       </div>

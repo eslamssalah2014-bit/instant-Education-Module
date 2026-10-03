@@ -9,6 +9,7 @@ import { KpiManagementPage } from './pages/KpiManagement/KpiManagementPage';
 import { CoachingPage } from './pages/Coaching/CoachingPage';
 import { FeedbackQualityPage } from './pages/FeedbackQuality/FeedbackQualityPage';
 import { CriteriaManagementPage } from './pages/CriteriaManagement/CriteriaManagementPage';
+import { GroupsManagementPage } from './pages/Groups/GroupsManagementPage';
 import { InstructorPortalPage } from './pages/InstructorPortal/InstructorPortalPage';
 import { ReportsPage } from './pages/Reports/ReportsPage';
 import { AuditLogsPage } from './pages/AuditLogs/AuditLogsPage';
@@ -20,6 +21,7 @@ export const AppContent: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(true);
   const [editingObservation, setEditingObservation] = useState<Observation | null>(null);
+  const [observationTarget, setObservationTarget] = useState<{ teacherId?: string; groupId?: string } | null>(null);
 
   // Auto-route instructors to instructor portal if visiting restricted manager screens
   useEffect(() => {
@@ -29,6 +31,7 @@ export const AppContent: React.FC = () => {
         currentTab === 'create-observation' ||
         currentTab === 'criteria-management' ||
         currentTab === 'instructors' ||
+        currentTab === 'groups' ||
         currentTab === 'audit-logs'
       ) {
         setCurrentTab('instructor-portal');
@@ -38,11 +41,13 @@ export const AppContent: React.FC = () => {
 
   const handleEditObservation = (obs: Observation) => {
     setEditingObservation(obs);
+    setObservationTarget(null);
     setCurrentTab('create-observation');
   };
 
   const handleFinishObservation = () => {
     setEditingObservation(null);
+    setObservationTarget(null);
     setCurrentTab('observations');
   };
 
@@ -54,6 +59,7 @@ export const AppContent: React.FC = () => {
             onNavigateToInstructors={() => setCurrentTab('instructors')}
             onNavigateToObservations={() => setCurrentTab('observations')}
             onNavigateToCoaching={() => setCurrentTab('coaching')}
+            onNavigateToGroups={() => setCurrentTab('groups')}
           />
         );
       case 'instructors':
@@ -61,6 +67,18 @@ export const AppContent: React.FC = () => {
           <InstructorsPage
             onNavigateToObservation={(instId) => {
               setEditingObservation(null);
+              setObservationTarget({ teacherId: instId });
+              setCurrentTab('create-observation');
+            }}
+            onNavigateToGroups={() => setCurrentTab('groups')}
+          />
+        );
+      case 'groups':
+        return (
+          <GroupsManagementPage
+            onNavigateToObservation={(teacherId, groupId) => {
+              setEditingObservation(null);
+              setObservationTarget({ teacherId, groupId });
               setCurrentTab('create-observation');
             }}
           />
@@ -70,6 +88,7 @@ export const AppContent: React.FC = () => {
           <ObservationsPage
             onNavigateToCreate={() => {
               setEditingObservation(null);
+              setObservationTarget(null);
               setCurrentTab('create-observation');
             }}
             onNavigateToEdit={handleEditObservation}
@@ -79,9 +98,12 @@ export const AppContent: React.FC = () => {
         return (
           <CreateObservationPage
             editingObservation={editingObservation}
+            initialTeacherId={observationTarget?.teacherId}
+            initialGroupId={observationTarget?.groupId}
             onObservationCreated={handleFinishObservation}
             onCancel={() => {
               setEditingObservation(null);
+              setObservationTarget(null);
               setCurrentTab('observations');
             }}
           />
@@ -106,6 +128,7 @@ export const AppContent: React.FC = () => {
             onNavigateToInstructors={() => setCurrentTab('instructors')}
             onNavigateToObservations={() => setCurrentTab('observations')}
             onNavigateToCoaching={() => setCurrentTab('coaching')}
+            onNavigateToGroups={() => setCurrentTab('groups')}
           />
         );
     }
@@ -119,6 +142,7 @@ export const AppContent: React.FC = () => {
         onSelectTab={(tab) => {
           if (tab !== 'create-observation') {
             setEditingObservation(null);
+            setObservationTarget(null);
           }
           setCurrentTab(tab);
         }}
@@ -137,6 +161,7 @@ export const AppContent: React.FC = () => {
           onNavigate={(tab) => {
             if (tab !== 'create-observation') {
               setEditingObservation(null);
+              setObservationTarget(null);
             }
             setCurrentTab(tab);
           }}

@@ -26,6 +26,10 @@ import {
   InstructorTier,
   InstructorStatus,
   getTierFromScore,
+  ImportValidationResult,
+  TeacherImportRow,
+  ImportValidationError,
+  GroupImportRow,
 } from '../types';
 import { supabase } from './supabase';
 import {
@@ -227,13 +231,67 @@ class LocalDatabase {
     };
   }
 
+  // --- Auto Code Generation Helpers ---
+  public generateTeacherCode(): string {
+    const numbers: number[] = [];
+    this.instructors.forEach((i) => {
+      const code = i.employeeId || i.teacherCode || '';
+      const match = code.match(/INS-(\d+)/i);
+      if (match) numbers.push(parseInt(match[1], 10));
+    });
+    const nextNum = numbers.length > 0 ? Math.max(...numbers) + 1 : 1;
+    return `INS-${String(nextNum).padStart(4, '0')}`;
+  }
+
+  public generateGroupCode(trackCode?: string): string {
+    const numbers: number[] = [];
+    this.groups.forEach((g) => {
+      const match = (g.code || '').match(/GRP-(\d+)/i);
+      if (match) numbers.push(parseInt(match[1], 10));
+    });
+    const nextNum = numbers.length > 0 ? Math.max(...numbers) + 1 : 1;
+    return `GRP-${String(nextNum).padStart(3, '0')}`;
+  }
+
   // --- Groups CRUD ---
-  public getGroups(): Group[] {
-    return this.groups.map((g) => ({
-      ...g,
-      track: this.tracks.find((t) => t.id === g.trackId),
-      instructor: this.instructors.find((i) => i.id === g.instructorId),
-    }));
+  public getGroups(params?: { trackId?: string; instructorId?: string; search?: string; status?: string }): Group[] {
+    let list = this.groups.map((g) => {
+      const track = this.tracks.find((t) => t.id === g.trackId);
+      const instructor = this.instructors.find((i) => i.id === g.instructorId);
+      const instructorUser = instructor ? this.users.find((u) => u.id === instructor.userId) : undefined;
+      const obsCount = this.observations.filter((o) => o.groupId === g.id).length;
+
+      return {
+        ...g,
+        track,
+        trackCode: track?.code,
+        instructor,
+        teacherCode: instructor?.employeeId,
+        teacherName: instructorUser?.name || instructor?.title || 'Unassigned',
+        observationsCount: obsCount,
+      };
+    });
+
+    if (params?.search) {
+      const q = params.search.toLowerCase();
+      list = list.filter(
+        (g) =>
+          g.name.toLowerCase().includes(q) ||
+          g.code.toLowerCase().includes(q) ||
+          g.teacherName?.toLowerCase().includes(q)
+      );
+    }
+    if (params?.trackId) {
+      list = list.filter((g) => g.trackId === params.trackId);
+    }
+    if (params?.instructorId) {
+      list = list.filter((g) => g.instructorId === params.instructorId);
+    }
+    if (params?.status) {
+      list = list.filter((g) => g.status === params.status);
+    }
+
+    return list;
   }
 
   public createGroup(payload: {
@@ -243,13 +301,19 @@ class LocalDatabase {
     instructorId?: string;
     studentCount?: number;
     term?: string;
+    startDate?: string;
+    endDate?: string;
+    status?: 'ACTIVE' | 'UPCOMING' | 'COMPLETED' | 'ARCHIVED';
   }): Group {
     if (!payload.name?.trim()) throw new Error('Cohort Group name is required.');
     if (!payload.trackId) throw new Error('Academic track is required for the cohort group.');
 
     const track = this.tracks.find((t) => t.id === payload.trackId);
-    const trackCode = track ? track.code.replace('TRK-', '') : 'GEN';
-    const groupCode = payload.code || `GRP-${trackCode}-${Math.floor(10 + Math.random() * 90)}`;
+    const groupCode = payload.code?.trim() || this.generateGroupCode(track?.code);
+
+    if (this.groups.some((g) => g.code.toUpperCase() === groupCode.toUpperCase())) {
+      throw new Error(`Group Code "${groupCode}" is already in use. Please specify a unique code.`);
+    }
 
     const newGroup: Group = {
       id: `grp-${Date.now()}`,
@@ -260,6 +324,9 @@ class LocalDatabase {
       instructorId: payload.instructorId || '',
       term: payload.term || 'Q4 2026',
       studentCount: payload.studentCount || 24,
+      startDate: payload.startDate || new Date().toISOString().split('T')[0],
+      endDate: payload.endDate || '',
+      status: payload.status || 'ACTIVE',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -268,6 +335,28 @@ class LocalDatabase {
     this.save('erp_groups', this.groups);
     this.logAction('GROUP_CREATED', 'Group', newGroup.id, { name: newGroup.name, code: newGroup.code });
     return newGroup;
+  }
+
+  public updateGroup(id: string, updates: Partial<Group>): Group {
+    const idx = this.groups.findIndex((g) => g.id === id);
+    if (idx === -1) throw new Error(`Cohort group with ID ${id} not found.`);
+
+    if (updates.code && updates.code !== this.groups[idx].code) {
+      if (this.groups.some((g) => g.id !== id && g.code.toUpperCase() === updates.code!.toUpperCase())) {
+        throw new Error(`Group Code "${updates.code}" is already in use.`);
+      }
+    }
+
+    const updated = {
+      ...this.groups[idx],
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    };
+
+    this.groups[idx] = updated;
+    this.save('erp_groups', this.groups);
+    this.logAction('GROUP_UPDATED', 'Group', id, { code: updated.code, name: updated.name });
+    return updated;
   }
 
   public deleteGroup(id: string): boolean {
@@ -280,17 +369,349 @@ class LocalDatabase {
     return true;
   }
 
+  // --- Bulk Import: Teachers Validation & Execution ---
+  public validateTeacherImport(rows: any[]): ImportValidationResult<TeacherImportRow> {
+    const errors: ImportValidationError[] = [];
+    const validRows: any[] = [];
+    const seenCodes = new Set<string>();
+    const seenEmails = new Set<string>();
+
+    const existingCodes = new Set(this.instructors.map((i) => (i.employeeId || '').toUpperCase()));
+    const existingEmails = new Set(this.users.map((u) => u.email.toLowerCase()));
+
+    rows.forEach((raw, idx) => {
+      const rowNum = idx + 2;
+      const teacherName = String(raw['Teacher Name'] || raw.teacherName || '').trim();
+      const email = String(raw['Email'] || raw.email || '').trim().toLowerCase();
+      const rawCode = String(raw['Teacher Code'] || raw.teacherCode || '').trim();
+      const phone = String(raw['Phone Number'] || raw.phone || raw.phoneNumber || '').trim();
+      const trackName = String(raw['Track'] || raw.track || '').trim();
+      const employmentType = String(raw['Employment Type'] || raw.employmentType || 'FULL_TIME').trim();
+      const status = String(raw['Status'] || raw.status || 'ACTIVE').trim();
+
+      let rowHasError = false;
+
+      // 1. Required Teacher Name
+      if (!teacherName) {
+        errors.push({ row: rowNum, field: 'Teacher Name', message: 'Teacher Name is required.' });
+        rowHasError = true;
+      }
+
+      // 2. Required Email & Format
+      if (!email) {
+        errors.push({ row: rowNum, field: 'Email', message: 'Email address is required.' });
+        rowHasError = true;
+      } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        errors.push({ row: rowNum, field: 'Email', value: email, message: 'Invalid email address format.' });
+        rowHasError = true;
+      } else if (seenEmails.has(email)) {
+        errors.push({ row: rowNum, field: 'Email', value: email, message: 'Duplicate email found within this import file.' });
+        rowHasError = true;
+      } else if (existingEmails.has(email)) {
+        errors.push({ row: rowNum, field: 'Email', value: email, message: 'An account with this email address already exists in the system.' });
+        rowHasError = true;
+      } else {
+        seenEmails.add(email);
+      }
+
+      // 3. Teacher Code (if provided)
+      let resolvedCode = rawCode;
+      if (rawCode) {
+        const upperCode = rawCode.toUpperCase();
+        if (seenCodes.has(upperCode)) {
+          errors.push({ row: rowNum, field: 'Teacher Code', value: rawCode, message: 'Duplicate Teacher Code within this import file.' });
+          rowHasError = true;
+        } else if (existingCodes.has(upperCode)) {
+          errors.push({ row: rowNum, field: 'Teacher Code', value: rawCode, message: 'Teacher Code is already assigned to an existing instructor in the database.' });
+          rowHasError = true;
+        } else {
+          seenCodes.add(upperCode);
+        }
+      }
+
+      // 4. Required Track
+      if (!trackName) {
+        errors.push({ row: rowNum, field: 'Track', message: 'Academic Track is required.' });
+        rowHasError = true;
+      }
+
+      if (!rowHasError) {
+        validRows.push({
+          rowNumber: rowNum,
+          teacherCode: resolvedCode,
+          teacherName,
+          email,
+          phone,
+          track: trackName,
+          employmentType,
+          status,
+        });
+      }
+    });
+
+    return {
+      isValid: errors.length === 0,
+      totalRows: rows.length,
+      validCount: validRows.length,
+      errorCount: errors.length,
+      validRows,
+      errors,
+    };
+  }
+
+  public importTeachers(rows: TeacherImportRow[]): Instructor[] {
+    const importedInstructors: Instructor[] = [];
+
+    rows.forEach((r) => {
+      // 1. Resolve or create Track
+      let track = this.tracks.find(
+        (t) =>
+          t.name.toLowerCase() === r.track.toLowerCase().trim() ||
+          t.code.toLowerCase() === r.track.toLowerCase().trim()
+      );
+      if (!track) {
+        const codeSuffix = r.track.slice(0, 3).toUpperCase();
+        track = {
+          id: `trk-${Date.now()}-${Math.floor(10 + Math.random() * 90)}`,
+          name: r.track.trim(),
+          code: `TRK-${codeSuffix}`,
+          description: `${r.track.trim()} Academic Track`,
+          color: '#4f46e5',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        this.tracks.push(track);
+        this.save('erp_tracks', this.tracks);
+      }
+
+      // 2. Generate Teacher Code if blank
+      const finalTeacherCode = r.teacherCode?.trim() || this.generateTeacherCode();
+
+      // 3. Create User account
+      const userId = `usr-inst-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
+      const newUser: User = {
+        id: userId,
+        email: r.email.trim(),
+        name: r.teacherName.trim(),
+        roleType: 'INSTRUCTOR',
+        phone: r.phone?.trim() || '',
+        department: track.name,
+        trackId: track.id,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      this.users.push(newUser);
+
+      // 4. Create Instructor Profile
+      const instId = `inst-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
+      const newInst: Instructor = {
+        id: instId,
+        userId,
+        user: newUser,
+        employeeId: finalTeacherCode,
+        teacherCode: finalTeacherCode,
+        trackId: track.id,
+        track,
+        title: 'Academic Instructor',
+        specialization: track.name,
+        phone: r.phone?.trim() || '',
+        email: r.email.trim(),
+        employmentType: r.employmentType || 'FULL_TIME',
+        hireDate: new Date().toISOString(),
+        status: (r.status as InstructorStatus) || 'ACTIVE',
+        averageScore: 0.0,
+        totalObserved: 0,
+        tier: 'B',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      this.instructors.unshift(newInst);
+      importedInstructors.push(newInst);
+    });
+
+    this.save('erp_users', this.users);
+    this.save('erp_instructors', this.instructors);
+
+    this.logAction('TEACHERS_BULK_IMPORTED', 'Instructor', 'bulk', {
+      count: importedInstructors.length,
+      sampleCode: importedInstructors[0]?.employeeId,
+    });
+
+    return importedInstructors;
+  }
+
+  // --- Bulk Import: Groups Validation & Execution ---
+  public validateGroupImport(rows: any[]): ImportValidationResult<GroupImportRow> {
+    const errors: ImportValidationError[] = [];
+    const validRows: any[] = [];
+    const seenGroupCodes = new Set<string>();
+
+    const existingGroupCodes = new Set(this.groups.map((g) => g.code.toUpperCase()));
+    const teachersMap = new Map<string, Instructor>();
+    this.instructors.forEach((i) => {
+      const code = (i.employeeId || i.teacherCode || '').toUpperCase();
+      if (code) teachersMap.set(code, i);
+    });
+
+    rows.forEach((raw, idx) => {
+      const rowNum = idx + 2;
+      const groupCode = String(raw['Group Code'] || raw.groupCode || '').trim();
+      const groupName = String(raw['Group Name'] || raw.groupName || '').trim();
+      const trackName = String(raw['Track'] || raw.track || '').trim();
+      const teacherCode = String(raw['Teacher Code'] || raw.teacherCode || '').trim();
+      const startDate = String(raw['Start Date'] || raw.startDate || '').trim();
+      const endDate = String(raw['End Date'] || raw.endDate || '').trim();
+      const status = String(raw['Status'] || raw.status || 'ACTIVE').trim();
+
+      let rowHasError = false;
+
+      // 1. Required Group Code & uniqueness
+      if (!groupCode) {
+        errors.push({ row: rowNum, field: 'Group Code', message: 'Group Code is required.' });
+        rowHasError = true;
+      } else {
+        const upper = groupCode.toUpperCase();
+        if (seenGroupCodes.has(upper)) {
+          errors.push({ row: rowNum, field: 'Group Code', value: groupCode, message: 'Duplicate Group Code within this import file.' });
+          rowHasError = true;
+        } else if (existingGroupCodes.has(upper)) {
+          errors.push({ row: rowNum, field: 'Group Code', value: groupCode, message: 'Group Code already exists in the database.' });
+          rowHasError = true;
+        } else {
+          seenGroupCodes.add(upper);
+        }
+      }
+
+      // 2. Required Group Name
+      if (!groupName) {
+        errors.push({ row: rowNum, field: 'Group Name', message: 'Group Name is required.' });
+        rowHasError = true;
+      }
+
+      // 3. Required Track
+      if (!trackName) {
+        errors.push({ row: rowNum, field: 'Track', message: 'Academic Track is required.' });
+        rowHasError = true;
+      }
+
+      // 4. Required Teacher Code & Verification
+      if (!teacherCode) {
+        errors.push({ row: rowNum, field: 'Teacher Code', message: 'Teacher Code is required to link the group to an instructor.' });
+        rowHasError = true;
+      } else {
+        const teacher = teachersMap.get(teacherCode.toUpperCase());
+        if (!teacher) {
+          errors.push({
+            row: rowNum,
+            field: 'Teacher Code',
+            value: teacherCode,
+            message: `Teacher Code "${teacherCode}" was not found in the Teachers database. Please import the teacher first.`,
+          });
+          rowHasError = true;
+        }
+      }
+
+      if (!rowHasError) {
+        const linkedTeacher = teachersMap.get(teacherCode.toUpperCase());
+        const teacherUser = linkedTeacher ? this.users.find((u) => u.id === linkedTeacher.userId) : undefined;
+
+        validRows.push({
+          rowNumber: rowNum,
+          groupCode,
+          groupName,
+          track: trackName,
+          teacherCode,
+          teacherName: teacherUser?.name || linkedTeacher?.title || 'Teacher',
+          teacherId: linkedTeacher?.id,
+          startDate,
+          endDate,
+          status,
+        });
+      }
+    });
+
+    return {
+      isValid: errors.length === 0,
+      totalRows: rows.length,
+      validCount: validRows.length,
+      errorCount: errors.length,
+      validRows,
+      errors,
+    };
+  }
+
+  public importGroups(rows: any[]): Group[] {
+    const importedGroups: Group[] = [];
+
+    rows.forEach((r) => {
+      // 1. Resolve Teacher
+      const teacher = this.instructors.find(
+        (i) => (i.employeeId || i.teacherCode || '').toUpperCase() === String(r.teacherCode).trim().toUpperCase()
+      );
+      if (!teacher) {
+        throw new Error(`Teacher Code "${r.teacherCode}" does not exist in database.`);
+      }
+
+      // 2. Resolve Track
+      let track = this.tracks.find(
+        (t) =>
+          t.name.toLowerCase() === String(r.track).toLowerCase().trim() ||
+          t.code.toLowerCase() === String(r.track).toLowerCase().trim()
+      );
+      if (!track) {
+        track = this.tracks.find((t) => t.id === teacher.trackId) || this.tracks[0];
+      }
+
+      const newGroup: Group = {
+        id: `grp-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`,
+        name: r.groupName.trim(),
+        code: r.groupCode.trim(),
+        trackId: track ? track.id : teacher.trackId,
+        track,
+        instructorId: teacher.id,
+        instructor: teacher,
+        term: 'Q4 2026',
+        studentCount: 24,
+        startDate: r.startDate || new Date().toISOString().split('T')[0],
+        endDate: r.endDate || '',
+        status: (r.status as any) || 'ACTIVE',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      this.groups.unshift(newGroup);
+      importedGroups.push(newGroup);
+    });
+
+    this.save('erp_groups', this.groups);
+
+    this.logAction('GROUPS_BULK_IMPORTED', 'Group', 'bulk', {
+      count: importedGroups.length,
+      sampleCode: importedGroups[0]?.code,
+    });
+
+    return importedGroups;
+  }
+
   // --- Instructors CRUD ---
   public getInstructors(params?: { search?: string; trackId?: string; tier?: string; status?: string }): Instructor[] {
     let list = this.instructors.map((ins) => {
       const user = this.users.find((u) => u.id === ins.userId);
       const track = this.tracks.find((t) => t.id === ins.trackId);
       const tier = ins.tier || getTierFromScore(ins.averageScore);
+      const assignedGroups = this.groups.filter((g) => g.instructorId === ins.id);
+
       return {
         ...ins,
         user,
         track,
         tier,
+        teacherCode: ins.employeeId,
+        email: user?.email,
+        phone: ins.phone || user?.phone,
+        groupsCount: assignedGroups.length,
+        groups: assignedGroups,
       };
     });
 
@@ -354,9 +775,11 @@ class LocalDatabase {
     name: string;
     email: string;
     trackId: string;
-    title: string;
-    specialization: string;
+    title?: string;
+    specialization?: string;
     phone?: string;
+    teacherCode?: string;
+    employmentType?: string;
     status?: InstructorStatus;
   }): Instructor {
     if (!payload.name?.trim()) throw new Error('Instructor Full Name is required.');
@@ -374,7 +797,7 @@ class LocalDatabase {
         email: payload.email.trim(),
         name: payload.name.trim(),
         roleType: 'INSTRUCTOR',
-        phone: payload.phone || '+1 (555) 000-0000',
+        phone: payload.phone || '',
         department: this.tracks.find((t) => t.id === payload.trackId)?.name || 'Academic Faculty',
         trackId: payload.trackId,
         createdAt: new Date().toISOString(),
@@ -385,19 +808,27 @@ class LocalDatabase {
     }
 
     const track = this.tracks.find((t) => t.id === payload.trackId);
-    const trackCode = track ? track.code.replace('TRK-', '') : 'FAC';
-    const randomEmp = Math.floor(100 + Math.random() * 900);
+    const finalTeacherCode = payload.teacherCode?.trim() || this.generateTeacherCode();
+
+    if (this.instructors.some((i) => (i.employeeId || '').toUpperCase() === finalTeacherCode.toUpperCase())) {
+      throw new Error(`Teacher Code "${finalTeacherCode}" already exists.`);
+    }
+
     const instId = `inst-${Date.now()}`;
 
     const newInstructor: Instructor = {
       id: instId,
       userId: userId!,
       user: this.users.find((u) => u.id === userId),
-      employeeId: `EMP-${trackCode}-${randomEmp}`,
+      employeeId: finalTeacherCode,
+      teacherCode: finalTeacherCode,
       trackId: payload.trackId,
       track,
       title: payload.title?.trim() || 'Academic Instructor',
-      specialization: payload.specialization?.trim() || 'Core Curriculum',
+      specialization: payload.specialization?.trim() || track?.name || 'Core Curriculum',
+      phone: payload.phone?.trim() || '',
+      email: payload.email.trim(),
+      employmentType: payload.employmentType || 'FULL_TIME',
       hireDate: new Date().toISOString(),
       status: payload.status || 'ACTIVE',
       averageScore: 0.0,
@@ -1363,6 +1794,14 @@ class LocalDatabase {
           bPlus,
           b,
         },
+        educationWorkload: {
+          totalTeachers: totalInsts,
+          totalGroups: this.groups.length,
+          groupsPerTeacher: totalInsts > 0 ? Number((this.groups.length / totalInsts).toFixed(1)) : 0,
+          observationCoveragePct: totalInsts > 0 ? Number(((observedInsts / totalInsts) * 100).toFixed(1)) : 0,
+          teachersWithoutGroups: insts.filter((i) => !this.groups.some((g) => g.instructorId === i.id)).length,
+          groupsWithoutObservations: this.groups.filter((g) => !this.observations.some((o) => o.groupId === g.id)).length,
+        },
       },
       trackAnalytics,
       observerAnalytics,
@@ -1712,10 +2151,31 @@ export const api = {
   // Meta & Lookups
   getMeta: async () => db.getMeta(),
 
+  // Auto Code Generation
+  generateTeacherCode: () => db.generateTeacherCode(),
+  generateGroupCode: (trackCode?: string) => db.generateGroupCode(trackCode),
+
+  // Bulk Import
+  validateTeacherImport: async (rows: any[]) => db.validateTeacherImport(rows),
+  importTeachers: async (rows: any[]) => db.importTeachers(rows),
+  validateGroupImport: async (rows: any[]) => db.validateGroupImport(rows),
+  importGroups: async (rows: any[]) => db.importGroups(rows),
+
   // Groups
-  getGroups: async () => db.getGroups(),
-  createGroup: async (data: { name: string; code?: string; trackId: string; instructorId?: string; studentCount?: number; term?: string }) =>
-    db.createGroup(data),
+  getGroups: async (params?: { trackId?: string; instructorId?: string; search?: string; status?: string }) =>
+    db.getGroups(params),
+  createGroup: async (data: {
+    name: string;
+    code?: string;
+    trackId: string;
+    instructorId?: string;
+    studentCount?: number;
+    term?: string;
+    startDate?: string;
+    endDate?: string;
+    status?: 'ACTIVE' | 'UPCOMING' | 'COMPLETED' | 'ARCHIVED';
+  }) => db.createGroup(data),
+  updateGroup: async (id: string, updates: Partial<Group>) => db.updateGroup(id, updates),
   deleteGroup: async (id: string) => db.deleteGroup(id),
 
   // Instructors
@@ -1726,9 +2186,11 @@ export const api = {
     name: string;
     email: string;
     trackId: string;
-    title: string;
-    specialization: string;
+    title?: string;
+    specialization?: string;
     phone?: string;
+    teacherCode?: string;
+    employmentType?: string;
     status?: InstructorStatus;
   }) => db.createInstructor(data),
   updateInstructor: async (id: string, updates: Partial<Instructor & { name?: string; email?: string }>) =>
