@@ -172,9 +172,9 @@ export const ObservationDetailsModal: React.FC<ObservationDetailsModalProps> = (
                     Tier {tier}
                   </span>
                 </div>
-                <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
-                  {observation.grade}
-                </span>
+                <div className="text-xs font-mono font-bold text-slate-600 dark:text-slate-300">
+                  {observation.totalScore} / {observation.maxScore || 100} pts • {observation.grade || tier}
+                </div>
               </div>
             </div>
           </div>
@@ -215,36 +215,108 @@ export const ObservationDetailsModal: React.FC<ObservationDetailsModalProps> = (
             </div>
           </div>
 
-          {/* Rubric Criteria Evaluation Breakdown */}
-          <div className="space-y-3">
-            <h4 className="text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-              Rubric Criteria Score Breakdown
-            </h4>
-            <div className="space-y-2.5">
-              {observation.scores?.map((sc, i) => (
-                <div
-                  key={sc.id || i}
-                  className="rounded-xl border border-slate-150 bg-slate-50/50 p-4 dark:border-slate-800 dark:bg-slate-800/30 space-y-1.5"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-sm text-slate-800 dark:text-slate-200">
-                      {sc.criterionName}
-                    </span>
-                    <div className="flex items-center gap-3">
-                      <span className="text-xs text-slate-400 font-mono">Weight: {sc.weight}%</span>
-                      <span className="font-mono text-base font-bold text-indigo-600 dark:text-indigo-400">
-                        {sc.score}/10
-                      </span>
+          {/* Hierarchical Rubric Criteria Score Breakdown */}
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                <Layers className="h-4 w-4 text-indigo-600" /> Hierarchical Evaluation Rubric Breakdown
+              </h4>
+              <span className="text-xs font-mono font-bold text-slate-500">
+                Master Score: {observation.totalScore} / {observation.maxScore || 100} pts
+              </span>
+            </div>
+
+            {observation.mainResults && observation.mainResults.length > 0 ? (
+              <div className="space-y-3">
+                {observation.mainResults.map((mr, mIdx) => (
+                  <div
+                    key={mr.id || mIdx}
+                    className="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-850 overflow-hidden shadow-sm"
+                  >
+                    {/* Main Criterion Header */}
+                    <div className="border-b border-slate-100 bg-slate-50/70 p-3.5 dark:border-slate-800 dark:bg-slate-800/50 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="flex h-5 w-5 items-center justify-center rounded bg-indigo-600 text-white font-mono text-[10px] font-bold">
+                          {mIdx + 1}
+                        </span>
+                        <span className="font-bold text-sm text-slate-900 dark:text-white">
+                          {mr.mainCriterionName}
+                        </span>
+                        <span className="text-xs text-slate-400 font-mono">
+                          (Weight: {mr.weightPercentage}%)
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-sm font-bold text-indigo-600 dark:text-indigo-400">
+                          {mr.score} / {mr.maxScore} pts
+                        </span>
+                        <span className="text-xs font-bold px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 font-mono">
+                          {mr.percentage}%
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Sub Criteria Rows */}
+                    <div className="p-3 space-y-2 bg-white dark:bg-slate-900/40">
+                      {(mr.subResults || []).map((sr, sIdx) => (
+                        <div
+                          key={sr.id || sIdx}
+                          className="rounded-lg border border-slate-150 bg-slate-50/50 p-2.5 dark:border-slate-800 dark:bg-slate-800/30 space-y-1"
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono text-[11px] text-slate-400 font-semibold">
+                                {mIdx + 1}.{sIdx + 1}
+                              </span>
+                              <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+                                {sr.subCriterionName}
+                              </span>
+                              <span className="text-[10px] text-slate-400">
+                                ({sr.weightPercentage}% of parent)
+                              </span>
+                            </div>
+                            <span className="font-mono text-xs font-bold text-indigo-600 dark:text-indigo-400">
+                              {sr.score} / {sr.maxScore} pts
+                            </span>
+                          </div>
+                          {sr.feedback && (
+                            <p className="text-xs text-slate-600 dark:text-slate-300 italic pl-2 border-l-2 border-indigo-400 mt-1">
+                              "{sr.feedback}"
+                            </p>
+                          )}
+                        </div>
+                      ))}
                     </div>
                   </div>
-                  {sc.feedback && (
-                    <p className="text-xs text-slate-600 dark:text-slate-300 italic pl-2 border-l-2 border-indigo-400">
-                      "{sc.feedback}"
-                    </p>
-                  )}
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                {observation.scores?.map((sc, i) => (
+                  <div
+                    key={sc.id || i}
+                    className="rounded-xl border border-slate-150 bg-slate-50/50 p-4 dark:border-slate-800 dark:bg-slate-800/30 space-y-1.5"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-sm text-slate-800 dark:text-slate-200">
+                        {sc.criterionName}
+                      </span>
+                      <div className="flex items-center gap-3">
+                        <span className="text-xs text-slate-400 font-mono">Weight: {sc.weight}%</span>
+                        <span className="font-mono text-base font-bold text-indigo-600 dark:text-indigo-400">
+                          {sc.score} pts
+                        </span>
+                      </div>
+                    </div>
+                    {sc.feedback && (
+                      <p className="text-xs text-slate-600 dark:text-slate-300 italic pl-2 border-l-2 border-indigo-400">
+                        "{sc.feedback}"
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Corrective Action Plan */}

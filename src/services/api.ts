@@ -6,6 +6,10 @@ import {
   ObservationTemplate,
   ObservationTemplateVersion,
   ObservationCriterion,
+  MainCriterion,
+  SubCriterion,
+  MainCriterionResult,
+  SubCriterionResult,
   Observation,
   ObservationType,
   ObservationStatus,
@@ -32,6 +36,8 @@ import {
   initialTemplates,
   initialVersions,
   initialCriteria,
+  initialMainCriteria,
+  initialSubCriteria,
   initialObservations,
   initialKpis,
   initialScorecards,
@@ -56,7 +62,11 @@ class LocalDatabase {
   private templates: ObservationTemplate[];
   private templateVersions: ObservationTemplateVersion[];
   private criteria: ObservationCriterion[];
+  private mainCriteria: MainCriterion[];
+  private subCriteria: SubCriterion[];
   private observations: Observation[];
+  private mainResults: MainCriterionResult[];
+  private subResults: SubCriterionResult[];
   private kpis: KpiDefinition[];
   private scorecards: KpiScorecard[];
   private kpiHistory: KpiMonthlyHistory[];
@@ -92,7 +102,11 @@ class LocalDatabase {
     this.templates = this.load('erp_templates', initialTemplates);
     this.templateVersions = this.load('erp_template_versions', initialVersions);
     this.criteria = this.load('erp_criteria', initialCriteria);
+    this.mainCriteria = this.load('erp_main_criteria', initialMainCriteria);
+    this.subCriteria = this.load('erp_sub_criteria', initialSubCriteria);
     this.observations = this.load('erp_observations', initialObservations);
+    this.mainResults = this.load('erp_main_results', []);
+    this.subResults = this.load('erp_sub_results', []);
     this.kpis = this.load('erp_kpis', initialKpis);
     this.scorecards = this.load('erp_scorecards', initialScorecards);
     this.kpiHistory = this.load('erp_kpi_history', initialKpiHistory);
@@ -146,6 +160,7 @@ class LocalDatabase {
               trackId: r.trackId,
               observationDate: r.observationDate || new Date().toISOString(),
               status: r.status || 'SUBMITTED',
+              maxScore: r.maxScore || 100.0,
               totalScore: r.totalScore || 0.0,
               weightedScore: r.weightedScore || 0.0,
               percentageScore: r.percentageScore || 0.0,
@@ -486,6 +501,13 @@ class LocalDatabase {
       const version = this.templateVersions.find((v) => v.id === obs.templateVersionId);
       const tier = obs.tier || getTierFromScore(obs.percentageScore);
 
+      const mainResults = (obs.mainResults && obs.mainResults.length > 0)
+        ? obs.mainResults
+        : this.mainResults.filter((mr) => mr.observationId === obs.id);
+      const subResults = (obs.subResults && obs.subResults.length > 0)
+        ? obs.subResults
+        : this.subResults.filter((sr) => sr.observationId === obs.id);
+
       return {
         ...obs,
         instructor: ins ? { ...ins, user } : undefined,
@@ -494,6 +516,11 @@ class LocalDatabase {
         track,
         templateVersion: version,
         tier,
+        mainResults: mainResults.map((mr) => ({
+          ...mr,
+          subResults: subResults.filter((sr) => sr.mainCriterionId === mr.mainCriterionId),
+        })),
+        subResults,
       };
     });
 
@@ -549,40 +576,133 @@ class LocalDatabase {
     const instructor = this.instructors.find((i) => i.id === payload.instructorId);
     if (!instructor) throw new Error('Instructor record does not exist.');
 
-    const tmplVersion = this.templateVersions.find(
-      (v) => v.templateId === (payload.observationType === 'TECHNICAL' ? 'tmpl-tech' : 'tmpl-nontech')
-    ) || this.templateVersions[0];
+    // Find template and version
+    let tmplVersion: ObservationTemplateVersion | undefined;
+    if (payload.templateVersionId) {
+      tmplVersion = this.templateVersions.find((v) => v.id === payload.templateVersionId);
+    }
+    if (!tmplVersion) {
+      const tmpl = this.templates.find(
+        (t) => t.type === (payload.observationType || 'TECHNICAL')
+      ) || this.templates[0];
+      if (tmpl) {
+        tmplVersion = this.templateVersions.find((v) => v.id === tmpl.currentVersionId) ||
+          this.templateVersions.find((v) => v.templateId === tmpl.id);
+      }
+    }
 
+    const masterTotalScore = tmplVersion?.totalScore || 100;
     const currentYear = new Date().getFullYear();
     const count = this.observations.length + 1;
     const code = `OBS-${currentYear}-${String(count).padStart(4, '0')}`;
+    const obsId = `obs-${Date.now()}`;
 
-    const scoreItems = payload.scores || [];
-    let weightedPercentage = 0;
-    let totalRaw = 0;
+    // Hierarchical evaluation calculation
+    const versionMainCriteria = tmplVersion
+      ? this.mainCriteria.filter((mc) => mc.templateVersionId === tmplVersion!.id).sort((a, b) => a.orderIndex - b.orderIndex)
+      : [];
 
-    scoreItems.forEach((s: any) => {
-      const crit = this.criteria.find((c) => c.id === s.criterionId);
-      const weight = crit ? crit.weightPercentage : 20;
-      weightedPercentage += (s.score / 10) * weight;
-      totalRaw += s.score;
-    });
+    let mainResults: MainCriterionResult[] = [];
+    let subResults: SubCriterionResult[] = [];
+    let totalAchievedScore = 0;
 
-    const avgScore = scoreItems.length > 0 ? totalRaw / scoreItems.length : 8.0;
-    const finalPercentage = scoreItems.length > 0 ? Number(weightedPercentage.toFixed(1)) : 80.0;
+    if (versionMainCriteria.length > 0) {
+      let subCounter = 1;
+      let mainCounter = 1;
+
+      versionMainCriteria.forEach((mc) => {
+        // Main Criterion Max Score = (weight / 100) * masterTotalScore
+        const mainCalculatedScore = Number(((mc.weightPercentage / 100) * masterTotalScore).toFixed(2));
+        const childSubCriteria = this.subCriteria
+          .filter((sc) => sc.mainCriterionId === mc.id)
+          .sort((a, b) => a.orderIndex - b.orderIndex);
+
+        let mainSubResults: SubCriterionResult[] = [];
+        let mainAchievedScore = 0;
+
+        childSubCriteria.forEach((sc) => {
+          // Sub Criterion Max Score = (weight / 100) * mainCalculatedScore
+          const subCalculatedScore = Number(((sc.weightPercentage / 100) * mainCalculatedScore).toFixed(2));
+
+          // Match user submitted score from payload.subResults or payload.scores
+          const submitted = (payload.subResults || []).find((s: any) => s.subCriterionId === sc.id) ||
+            (payload.scores || []).find((s: any) => s.criterionId === sc.id || s.subCriterionId === sc.id);
+
+          const rawScore = submitted ? Number(submitted.score || 0) : 0;
+          const clampedScore = Math.min(Math.max(0, rawScore), subCalculatedScore);
+
+          const subRes: SubCriterionResult = {
+            id: `subres-${Date.now()}-${subCounter++}`,
+            observationId: obsId,
+            mainCriterionId: mc.id,
+            subCriterionId: sc.id,
+            subCriterionName: sc.name,
+            weightPercentage: sc.weightPercentage,
+            maxScore: subCalculatedScore,
+            score: Number(clampedScore.toFixed(2)),
+            feedback: submitted?.feedback || '',
+          };
+
+          mainSubResults.push(subRes);
+          subResults.push(subRes);
+          mainAchievedScore += subRes.score;
+        });
+
+        mainAchievedScore = Number(mainAchievedScore.toFixed(2));
+        const mainPercentage = mainCalculatedScore > 0
+          ? Number(((mainAchievedScore / mainCalculatedScore) * 100).toFixed(1))
+          : 0;
+
+        const mainRes: MainCriterionResult = {
+          id: `mainres-${Date.now()}-${mainCounter++}`,
+          observationId: obsId,
+          mainCriterionId: mc.id,
+          mainCriterionName: mc.name,
+          weightPercentage: mc.weightPercentage,
+          maxScore: mainCalculatedScore,
+          score: mainAchievedScore,
+          percentage: mainPercentage,
+          subResults: mainSubResults,
+        };
+
+        mainResults.push(mainRes);
+        totalAchievedScore += mainAchievedScore;
+      });
+    } else {
+      // Fallback for flat criteria if any legacy
+      const scoreItems = payload.scores || [];
+      let weightedPercentage = 0;
+      scoreItems.forEach((s: any) => {
+        const crit = this.criteria.find((c) => c.id === s.criterionId);
+        const weight = crit ? crit.weightPercentage : 20;
+        weightedPercentage += (s.score / 10) * weight;
+        totalAchievedScore += s.score;
+      });
+      totalAchievedScore = Number(totalAchievedScore.toFixed(2));
+    }
+
+    const finalTotalScore = Number(totalAchievedScore.toFixed(2));
+    const finalPercentage = masterTotalScore > 0
+      ? Number(((finalTotalScore / masterTotalScore) * 100).toFixed(1))
+      : 80.0;
     const tier = getTierFromScore(finalPercentage);
+    const grade = tier;
 
-    const grade =
-      finalPercentage >= 90
-        ? 'Outstanding'
-        : finalPercentage >= 80
-        ? 'Proficient'
-        : finalPercentage >= 70
-        ? 'Developing'
-        : 'Needs Improvement';
+    // Legacy scores array for compatibility
+    const legacyScores = subResults.map((sr, idx) => ({
+      id: `score-${Date.now()}-${idx}`,
+      observationId: obsId,
+      criterionId: sr.subCriterionId,
+      criterionName: sr.subCriterionName,
+      score: sr.score,
+      weight: sr.weightPercentage,
+      weightedScore: sr.score,
+      feedback: sr.feedback || '',
+      createdAt: new Date().toISOString(),
+    }));
 
     const newObservation: Observation = {
-      id: `obs-${Date.now()}`,
+      id: obsId,
       observationCode: code,
       templateVersionId: tmplVersion ? tmplVersion.id : 'tmpl-ver-tech-1',
       type: payload.observationType || 'TECHNICAL',
@@ -592,29 +712,18 @@ class LocalDatabase {
       trackId: instructor.trackId,
       observationDate: payload.observationDate || new Date().toISOString(),
       status: payload.status || 'SUBMITTED',
-      totalScore: Number(avgScore.toFixed(2)),
+      maxScore: masterTotalScore,
+      totalScore: finalTotalScore,
       weightedScore: finalPercentage,
       percentageScore: finalPercentage,
       grade,
       tier,
-      scores: scoreItems.map((s: any, idx: number) => {
-        const crit = this.criteria.find((c) => c.id === s.criterionId);
-        const weight = crit ? crit.weightPercentage : 20;
-        return {
-          id: `score-${Date.now()}-${idx}`,
-          observationId: `obs-${Date.now()}`,
-          criterionId: s.criterionId,
-          criterionName: crit?.name || 'Criterion',
-          score: s.score,
-          weight,
-          weightedScore: Number(((s.score / 10) * weight).toFixed(2)),
-          feedback: s.feedback || '',
-          createdAt: new Date().toISOString(),
-        };
-      }),
+      mainResults,
+      subResults,
+      scores: legacyScores,
       feedback: {
         id: `fb-${Date.now()}`,
-        observationId: `obs-${Date.now()}`,
+        observationId: obsId,
         generalComments: payload.feedback?.generalComments || '',
         strengths: payload.feedback?.strengths || '',
         areasForImprovement: payload.feedback?.areasForImprovement || '',
@@ -628,7 +737,12 @@ class LocalDatabase {
     };
 
     this.observations.unshift(newObservation);
+    this.mainResults.push(...mainResults);
+    this.subResults.push(...subResults);
+
     this.save('erp_observations', this.observations);
+    this.save('erp_main_results', this.mainResults);
+    this.save('erp_sub_results', this.subResults);
 
     // Recalculate instructor average score
     const instObs = this.observations.filter((o) => o.instructorId === instructor.id && o.status !== 'DRAFT');
@@ -648,6 +762,8 @@ class LocalDatabase {
       code: newObservation.observationCode,
       tier,
       percentageScore: finalPercentage,
+      totalScore: finalTotalScore,
+      maxScore: masterTotalScore,
     });
 
     return newObservation;
@@ -685,7 +801,12 @@ class LocalDatabase {
     const instId = this.observations[idx].instructorId;
 
     this.observations.splice(idx, 1);
+    this.mainResults = this.mainResults.filter((mr) => mr.observationId !== id);
+    this.subResults = this.subResults.filter((sr) => sr.observationId !== id);
+
     this.save('erp_observations', this.observations);
+    this.save('erp_main_results', this.mainResults);
+    this.save('erp_sub_results', this.subResults);
 
     // Recalculate instructor statistics
     const instObs = this.observations.filter((o) => o.instructorId === instId && o.status !== 'DRAFT');
@@ -703,10 +824,43 @@ class LocalDatabase {
   // --- Templates CRUD ---
   public getTemplates(): ObservationTemplate[] {
     return this.templates.map((tmpl) => {
-      const versions = this.templateVersions.filter((v) => v.templateId === tmpl.id);
+      const versions = this.templateVersions
+        .filter((v) => v.templateId === tmpl.id)
+        .map((v) => {
+          const masterScore = v.totalScore || tmpl.totalScore || 100;
+          const mainCrits = this.mainCriteria
+            .filter((mc) => mc.templateVersionId === v.id)
+            .sort((a, b) => a.orderIndex - b.orderIndex)
+            .map((mc) => {
+              const mainCalc = Number(((mc.weightPercentage / 100) * masterScore).toFixed(2));
+              const subCrits = this.subCriteria
+                .filter((sc) => sc.mainCriterionId === mc.id)
+                .sort((a, b) => a.orderIndex - b.orderIndex)
+                .map((sc) => {
+                  const subCalc = Number(((sc.weightPercentage / 100) * mainCalc).toFixed(2));
+                  return {
+                    ...sc,
+                    calculatedScore: subCalc,
+                  };
+                });
+              return {
+                ...mc,
+                calculatedScore: mainCalc,
+                subCriteria: subCrits,
+              };
+            });
+
+          return {
+            ...v,
+            totalScore: masterScore,
+            mainCriteria: mainCrits,
+          };
+        });
+
       const currentVersion = versions.find((v) => v.id === tmpl.currentVersionId) || versions[0];
       return {
         ...tmpl,
+        totalScore: tmpl.totalScore || 100,
         currentVersion,
         versions,
       };
@@ -716,53 +870,146 @@ class LocalDatabase {
   public getTemplatePreview(type: ObservationType): ObservationTemplate & { currentVersion: ObservationTemplateVersion } {
     const tmpls = this.getTemplates();
     const tmpl = tmpls.find((t) => t.type === type) || tmpls[0];
-    const ver = this.templateVersions.find((v) => v.templateId === tmpl.id) || this.templateVersions[0];
+    if (!tmpl) {
+      throw new Error(`No observation template available for type ${type}`);
+    }
     return {
       ...tmpl,
-      currentVersion: ver,
+      currentVersion: tmpl.currentVersion || {
+        id: 'tmpl-ver-empty',
+        templateId: tmpl.id,
+        versionNumber: 'v1.0',
+        changeLog: 'Initial release',
+        totalScore: tmpl.totalScore || 100,
+        createdById: this.currentUserId,
+        isActive: true,
+        mainCriteria: [],
+        createdAt: new Date().toISOString(),
+      },
     };
   }
 
-  public createTemplate(data: { name: string; code: string; type: ObservationType; description: string }): ObservationTemplate {
+  public createTemplate(data: {
+    name: string;
+    code: string;
+    type: ObservationType;
+    description?: string;
+    totalScore?: number;
+    mainCriteria?: Array<{
+      name: string;
+      description?: string;
+      weightPercentage: number;
+      subCriteria?: Array<{
+        name: string;
+        description?: string;
+        weightPercentage: number;
+      }>;
+    }>;
+  }): ObservationTemplate {
     if (!data.name?.trim()) throw new Error('Template name is required.');
     if (!data.code?.trim()) throw new Error('Template code is required.');
 
+    const masterTotalScore = Number(data.totalScore) > 0 ? Number(data.totalScore) : 100;
     const id = `tmpl-${Date.now()}`;
     const verId = `tmpl-ver-${Date.now()}`;
 
-    const defaultCrit: ObservationCriterion[] = [
-      {
-        id: `crit-${Date.now()}-1`,
-        templateVersionId: verId,
-        name: 'Technical Competence',
-        description: 'Demonstrates deep mastery of the subject matter.',
-        weightPercentage: 50,
-        orderIndex: 1,
-        isActive: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      },
-      {
-        id: `crit-${Date.now()}-2`,
-        templateVersionId: verId,
-        name: 'Student Communication & Clarity',
-        description: 'Explains complex ideas with clarity and engagement.',
-        weightPercentage: 50,
-        orderIndex: 2,
-        isActive: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      },
-    ];
+    let builtMainCriteria: MainCriterion[] = [];
+    let builtSubCriteria: SubCriterion[] = [];
+
+    if (data.mainCriteria && data.mainCriteria.length > 0) {
+      // Validate weights
+      const totalMainWeight = data.mainCriteria.reduce((sum, mc) => sum + Number(mc.weightPercentage || 0), 0);
+      if (Math.abs(totalMainWeight - 100) > 0.05) {
+        throw new Error(`Total Main Criteria weight must equal exactly 100%. Current sum: ${totalMainWeight}%`);
+      }
+
+      data.mainCriteria.forEach((mc, mIdx) => {
+        const mainId = `mc-${Date.now()}-${mIdx + 1}`;
+        const mainScore = Number(((mc.weightPercentage / 100) * masterTotalScore).toFixed(2));
+        const subList = mc.subCriteria || [];
+
+        if (subList.length > 0) {
+          const subWeightSum = subList.reduce((sum, sc) => sum + Number(sc.weightPercentage || 0), 0);
+          if (Math.abs(subWeightSum - 100) > 0.05) {
+            throw new Error(`Sub Criteria for "${mc.name}" must sum to exactly 100%. Current sum: ${subWeightSum}%`);
+          }
+        }
+
+        const childSubs: SubCriterion[] = subList.map((sc, sIdx) => {
+          const subId = `sc-${Date.now()}-${mIdx + 1}-${sIdx + 1}`;
+          const subScore = Number(((sc.weightPercentage / 100) * mainScore).toFixed(2));
+          const subCriterionObj: SubCriterion = {
+            id: subId,
+            mainCriterionId: mainId,
+            name: sc.name.trim(),
+            description: sc.description || '',
+            weightPercentage: sc.weightPercentage,
+            calculatedScore: subScore,
+            orderIndex: sIdx + 1,
+            isActive: true,
+          };
+          builtSubCriteria.push(subCriterionObj);
+          return subCriterionObj;
+        });
+
+        builtMainCriteria.push({
+          id: mainId,
+          templateVersionId: verId,
+          name: mc.name.trim(),
+          description: mc.description || '',
+          weightPercentage: mc.weightPercentage,
+          calculatedScore: mainScore,
+          orderIndex: mIdx + 1,
+          isActive: true,
+          subCriteria: childSubs,
+        });
+      });
+    } else {
+      // Default hierarchical criteria conforming to user specification:
+      // Technical Competence (50% -> 50 pts) with 4 sub criteria (Teaching 40% -> 20 pts, Presentation 30% -> 15 pts, Subject 20% -> 10 pts, Problem Solving 10% -> 5 pts)
+      // Student Engagement (30% -> 30 pts) with 2 sub criteria (50% -> 15 pts, 50% -> 15 pts)
+      // Classroom Management (20% -> 20 pts) with 2 sub criteria (50% -> 10 pts, 50% -> 10 pts)
+      const mc1Id = `mc-${Date.now()}-1`;
+      const mc1Score = Number((0.50 * masterTotalScore).toFixed(2));
+      const sub1: SubCriterion[] = [
+        { id: `sc-${Date.now()}-1-1`, mainCriterionId: mc1Id, name: 'Teaching Skills', description: 'Pedagogical execution and learning scaffolding', weightPercentage: 40, calculatedScore: Number((0.40 * mc1Score).toFixed(2)), orderIndex: 1, isActive: true },
+        { id: `sc-${Date.now()}-1-2`, mainCriterionId: mc1Id, name: 'Presentation Skills', description: 'Clarity of speech, pacing, and visual aids', weightPercentage: 30, calculatedScore: Number((0.30 * mc1Score).toFixed(2)), orderIndex: 2, isActive: true },
+        { id: `sc-${Date.now()}-1-3`, mainCriterionId: mc1Id, name: 'Subject Knowledge', description: 'Technical mastery and conceptual depth', weightPercentage: 20, calculatedScore: Number((0.20 * mc1Score).toFixed(2)), orderIndex: 3, isActive: true },
+        { id: `sc-${Date.now()}-1-4`, mainCriterionId: mc1Id, name: 'Problem Solving', description: 'Live coding, debugging, and answering student blockers', weightPercentage: 10, calculatedScore: Number((0.10 * mc1Score).toFixed(2)), orderIndex: 4, isActive: true },
+      ];
+
+      const mc2Id = `mc-${Date.now()}-2`;
+      const mc2Score = Number((0.30 * masterTotalScore).toFixed(2));
+      const sub2: SubCriterion[] = [
+        { id: `sc-${Date.now()}-2-1`, mainCriterionId: mc2Id, name: 'Student Engagement & Interaction', description: 'Active questioning, checks for understanding, and discussions', weightPercentage: 50, calculatedScore: Number((0.50 * mc2Score).toFixed(2)), orderIndex: 1, isActive: true },
+        { id: `sc-${Date.now()}-2-2`, mainCriterionId: mc2Id, name: 'Inclusive Participation', description: 'Ensuring all student tiers contribute and follow along', weightPercentage: 50, calculatedScore: Number((0.50 * mc2Score).toFixed(2)), orderIndex: 2, isActive: true },
+      ];
+
+      const mc3Id = `mc-${Date.now()}-3`;
+      const mc3Score = Number((0.20 * masterTotalScore).toFixed(2));
+      const sub3: SubCriterion[] = [
+        { id: `sc-${Date.now()}-3-1`, mainCriterionId: mc3Id, name: 'Pacing & Time Management', description: 'Adheres to agenda timelines and allocates lab time', weightPercentage: 50, calculatedScore: Number((0.50 * mc3Score).toFixed(2)), orderIndex: 1, isActive: true },
+        { id: `sc-${Date.now()}-3-2`, mainCriterionId: mc3Id, name: 'Classroom & Tool Readiness', description: 'IDE, repositories, and learning resources prepared', weightPercentage: 50, calculatedScore: Number((0.50 * mc3Score).toFixed(2)), orderIndex: 2, isActive: true },
+      ];
+
+      builtMainCriteria = [
+        { id: mc1Id, templateVersionId: verId, name: 'Technical Competence', description: 'Technical mastery and coding demonstration', weightPercentage: 50, calculatedScore: mc1Score, orderIndex: 1, isActive: true, subCriteria: sub1 },
+        { id: mc2Id, templateVersionId: verId, name: 'Student Engagement', description: 'Interactive learning and class participation', weightPercentage: 30, calculatedScore: mc2Score, orderIndex: 2, isActive: true, subCriteria: sub2 },
+        { id: mc3Id, templateVersionId: verId, name: 'Communication & Management', description: 'Classroom discipline, pacing, and time allocation', weightPercentage: 20, calculatedScore: mc3Score, orderIndex: 3, isActive: true, subCriteria: sub3 },
+      ];
+
+      builtSubCriteria = [...sub1, ...sub2, ...sub3];
+    }
 
     const newVersion: ObservationTemplateVersion = {
       id: verId,
       templateId: id,
       versionNumber: 'v1.0',
-      changeLog: 'Initial release',
+      changeLog: 'Initial hierarchical rubric release',
+      totalScore: masterTotalScore,
       createdById: this.currentUserId,
       isActive: true,
-      criteria: defaultCrit,
+      mainCriteria: builtMainCriteria,
       createdAt: new Date().toISOString(),
     };
 
@@ -772,33 +1019,209 @@ class LocalDatabase {
       name: data.name.trim(),
       type: data.type,
       description: data.description || '',
+      totalScore: masterTotalScore,
       isActive: true,
       isArchived: false,
       currentVersionId: verId,
+      currentVersion: newVersion,
+      versions: [newVersion],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
 
     this.templates.unshift(newTmpl);
     this.templateVersions.unshift(newVersion);
-    this.criteria.push(...defaultCrit);
+    this.mainCriteria.push(...builtMainCriteria);
+    this.subCriteria.push(...builtSubCriteria);
 
     this.save('erp_templates', this.templates);
     this.save('erp_template_versions', this.templateVersions);
-    this.save('erp_criteria', this.criteria);
+    this.save('erp_main_criteria', this.mainCriteria);
+    this.save('erp_sub_criteria', this.subCriteria);
 
-    this.logAction('TEMPLATE_CREATED', 'ObservationTemplate', id, { code: newTmpl.code, name: newTmpl.name });
+    this.logAction('TEMPLATE_CREATED', 'ObservationTemplate', id, {
+      code: newTmpl.code,
+      name: newTmpl.name,
+      totalScore: masterTotalScore,
+      mainCriteriaCount: builtMainCriteria.length,
+    });
+
     return newTmpl;
+  }
+
+  public bumpTemplateVersion(
+    templateId: string,
+    data: {
+      versionNumber: string;
+      changeLog: string;
+      totalScore?: number;
+      mainCriteria: Array<{
+        name: string;
+        description?: string;
+        weightPercentage: number;
+        subCriteria?: Array<{
+          name: string;
+          description?: string;
+          weightPercentage: number;
+        }>;
+      }>;
+    }
+  ): ObservationTemplateVersion {
+    const tmpl = this.templates.find((t) => t.id === templateId);
+    if (!tmpl) throw new Error(`Template with ID ${templateId} not found.`);
+
+    const masterTotalScore = Number(data.totalScore) > 0 ? Number(data.totalScore) : (tmpl.totalScore || 100);
+
+    // Validate Main Criteria sum to 100%
+    const totalMainWeight = data.mainCriteria.reduce((sum, mc) => sum + Number(mc.weightPercentage || 0), 0);
+    if (Math.abs(totalMainWeight - 100) > 0.05) {
+      throw new Error(`Total Main Criteria weight must equal exactly 100%. Current sum: ${totalMainWeight}%`);
+    }
+
+    const verId = `tmpl-ver-${Date.now()}`;
+    const builtMainCriteria: MainCriterion[] = [];
+    const builtSubCriteria: SubCriterion[] = [];
+
+    data.mainCriteria.forEach((mc, mIdx) => {
+      const mainId = `mc-${Date.now()}-${mIdx + 1}`;
+      const mainScore = Number(((mc.weightPercentage / 100) * masterTotalScore).toFixed(2));
+      const subList = mc.subCriteria || [];
+
+      if (subList.length > 0) {
+        const subWeightSum = subList.reduce((sum, sc) => sum + Number(sc.weightPercentage || 0), 0);
+        if (Math.abs(subWeightSum - 100) > 0.05) {
+          throw new Error(`Sub Criteria inside "${mc.name}" must equal exactly 100%. Current sum: ${subWeightSum}%`);
+        }
+      }
+
+      const childSubs: SubCriterion[] = subList.map((sc, sIdx) => {
+        const subId = `sc-${Date.now()}-${mIdx + 1}-${sIdx + 1}`;
+        const subScore = Number(((sc.weightPercentage / 100) * mainScore).toFixed(2));
+        const subObj: SubCriterion = {
+          id: subId,
+          mainCriterionId: mainId,
+          name: sc.name.trim(),
+          description: sc.description || '',
+          weightPercentage: sc.weightPercentage,
+          calculatedScore: subScore,
+          orderIndex: sIdx + 1,
+          isActive: true,
+        };
+        builtSubCriteria.push(subObj);
+        return subObj;
+      });
+
+      builtMainCriteria.push({
+        id: mainId,
+        templateVersionId: verId,
+        name: mc.name.trim(),
+        description: mc.description || '',
+        weightPercentage: mc.weightPercentage,
+        calculatedScore: mainScore,
+        orderIndex: mIdx + 1,
+        isActive: true,
+        subCriteria: childSubs,
+      });
+    });
+
+    const newVersion: ObservationTemplateVersion = {
+      id: verId,
+      templateId,
+      versionNumber: data.versionNumber,
+      changeLog: data.changeLog,
+      totalScore: masterTotalScore,
+      createdById: this.currentUserId,
+      isActive: true,
+      mainCriteria: builtMainCriteria,
+      createdAt: new Date().toISOString(),
+    };
+
+    tmpl.totalScore = masterTotalScore;
+    tmpl.currentVersionId = verId;
+    tmpl.updatedAt = new Date().toISOString();
+
+    this.templateVersions.unshift(newVersion);
+    this.mainCriteria.push(...builtMainCriteria);
+    this.subCriteria.push(...builtSubCriteria);
+
+    this.save('erp_templates', this.templates);
+    this.save('erp_template_versions', this.templateVersions);
+    this.save('erp_main_criteria', this.mainCriteria);
+    this.save('erp_sub_criteria', this.subCriteria);
+
+    this.logAction('TEMPLATE_VERSION_BUMPED', 'ObservationTemplateVersion', verId, {
+      templateId,
+      versionNumber: data.versionNumber,
+      totalScore: masterTotalScore,
+    });
+
+    return newVersion;
+  }
+
+  public cloneTemplate(templateId: string): ObservationTemplate {
+    const tmpls = this.getTemplates();
+    const source = tmpls.find((t) => t.id === templateId);
+    if (!source) throw new Error(`Template ${templateId} not found.`);
+
+    const currentVer = source.currentVersion;
+    const mainCriteriaPayload = (currentVer?.mainCriteria || []).map((mc) => ({
+      name: mc.name,
+      description: mc.description,
+      weightPercentage: mc.weightPercentage,
+      subCriteria: (mc.subCriteria || []).map((sc) => ({
+        name: sc.name,
+        description: sc.description,
+        weightPercentage: sc.weightPercentage,
+      })),
+    }));
+
+    return this.createTemplate({
+      name: `${source.name} (Copy)`,
+      code: `${source.code}-COPY`,
+      type: source.type,
+      description: source.description,
+      totalScore: source.totalScore || 100,
+      mainCriteria: mainCriteriaPayload,
+    });
+  }
+
+  public toggleTemplateStatus(templateId: string, isActive: boolean): boolean {
+    const tmpl = this.templates.find((t) => t.id === templateId);
+    if (!tmpl) throw new Error(`Template ${templateId} not found.`);
+    tmpl.isActive = isActive;
+    tmpl.updatedAt = new Date().toISOString();
+    this.save('erp_templates', this.templates);
+    this.logAction('TEMPLATE_STATUS_CHANGED', 'ObservationTemplate', templateId, { isActive });
+    return true;
+  }
+
+  public archiveTemplate(templateId: string, isArchived: boolean): boolean {
+    const tmpl = this.templates.find((t) => t.id === templateId);
+    if (!tmpl) throw new Error(`Template ${templateId} not found.`);
+    tmpl.isArchived = isArchived;
+    tmpl.updatedAt = new Date().toISOString();
+    this.save('erp_templates', this.templates);
+    this.logAction('TEMPLATE_ARCHIVE_CHANGED', 'ObservationTemplate', templateId, { isArchived });
+    return true;
   }
 
   public deleteTemplate(id: string): boolean {
     const idx = this.templates.findIndex((t) => t.id === id);
     if (idx === -1) throw new Error(`Template with ID ${id} not found.`);
     const tmpl = this.templates[idx];
+    const versionIds = this.templateVersions.filter((v) => v.templateId === id).map((v) => v.id);
+    const mainCritIds = this.mainCriteria.filter((mc) => versionIds.includes(mc.templateVersionId)).map((mc) => mc.id);
+
     this.templates.splice(idx, 1);
     this.templateVersions = this.templateVersions.filter((v) => v.templateId !== id);
+    this.mainCriteria = this.mainCriteria.filter((mc) => !versionIds.includes(mc.templateVersionId));
+    this.subCriteria = this.subCriteria.filter((sc) => !mainCritIds.includes(sc.mainCriterionId));
+
     this.save('erp_templates', this.templates);
     this.save('erp_template_versions', this.templateVersions);
+    this.save('erp_main_criteria', this.mainCriteria);
+    this.save('erp_sub_criteria', this.subCriteria);
+
     this.logAction('TEMPLATE_DELETED', 'ObservationTemplate', id, { code: tmpl.code });
     return true;
   }
@@ -1211,6 +1634,10 @@ class LocalDatabase {
       tracks: this.tracks.length,
       templates: this.templates.length,
       criteria: this.criteria.length,
+      mainCriteria: this.mainCriteria.length,
+      subCriteria: this.subCriteria.length,
+      mainResults: this.mainResults.length,
+      subResults: this.subResults.length,
       kpiDefinitions: this.kpis.length,
       scorecards: this.scorecards.length,
       coachingSessions: this.coachingSessions.length,
@@ -1227,6 +1654,10 @@ class LocalDatabase {
     this.templates = [];
     this.templateVersions = [];
     this.criteria = [];
+    this.mainCriteria = [];
+    this.subCriteria = [];
+    this.mainResults = [];
+    this.subResults = [];
     this.kpis = [];
     this.scorecards = [];
     this.kpiHistory = [];
@@ -1332,20 +1763,11 @@ export const api = {
   getTemplatePreview: async (type: ObservationType) => db.getTemplatePreview(type),
   createTemplate: async (data: any) => db.createTemplate(data),
   deleteTemplate: async (id: string) => db.deleteTemplate(id),
-  bumpTemplateVersion: async (templateId: string, data: { versionNumber: string; changeLog: string; criteria: any[] }) => {
-    return { id: `ver-${Date.now()}`, templateId, ...data };
-  },
-  cloneTemplate: async (templateId: string) => {
-    const tmpl = (await db.getTemplates()).find((t) => t.id === templateId);
-    return db.createTemplate({
-      name: `${tmpl?.name || 'Template'} (Copy)`,
-      code: `${tmpl?.code || 'TMPL'}-COPY`,
-      type: tmpl?.type || 'TECHNICAL',
-      description: tmpl?.description || '',
-    });
-  },
-  toggleTemplateStatus: async (templateId: string, isActive: boolean) => true,
-  archiveTemplate: async (templateId: string, isArchived: boolean) => true,
+  bumpTemplateVersion: async (templateId: string, data: { versionNumber: string; changeLog: string; totalScore?: number; mainCriteria: any[] }) =>
+    db.bumpTemplateVersion(templateId, data),
+  cloneTemplate: async (templateId: string) => db.cloneTemplate(templateId),
+  toggleTemplateStatus: async (templateId: string, isActive: boolean) => db.toggleTemplateStatus(templateId, isActive),
+  archiveTemplate: async (templateId: string, isArchived: boolean) => db.archiveTemplate(templateId, isArchived),
 
   // Dashboard
   getDashboardAnalytics: async (trackId?: string) => db.getDashboardAnalytics(trackId),
@@ -1415,16 +1837,84 @@ export const api = {
     }
 
     if (reportType === 'CRITERIA_ANALYSIS') {
+      if (obs.length === 0) return { data: [], mainCriteriaBreakdown: [], subCriteriaBreakdown: [], weakestAreas: [], strongestAreas: [] };
+
+      // Collect all main results and sub results
+      const allMainResults: MainCriterionResult[] = [];
+      const allSubResults: SubCriterionResult[] = [];
+
+      obs.forEach((o) => {
+        if (o.mainResults && o.mainResults.length > 0) {
+          allMainResults.push(...o.mainResults);
+        }
+        if (o.subResults && o.subResults.length > 0) {
+          allSubResults.push(...o.subResults);
+        }
+      });
+
+      // Group sub criteria
+      const subMap = new Map<string, { name: string; mainCriterionId: string; totalScore: number; totalMax: number; count: number }>();
+      allSubResults.forEach((sr) => {
+        const key = sr.subCriterionName;
+        const existing = subMap.get(key) || { name: key, mainCriterionId: sr.mainCriterionId, totalScore: 0, totalMax: 0, count: 0 };
+        existing.totalScore += sr.score;
+        existing.totalMax += sr.maxScore;
+        existing.count += 1;
+        subMap.set(key, existing);
+      });
+
+      const subBreakdown = Array.from(subMap.values()).map((s) => {
+        const avgScore = Number((s.totalScore / s.count).toFixed(2));
+        const avgMax = Number((s.totalMax / s.count).toFixed(2));
+        const avgPct = avgMax > 0 ? Number(((avgScore / avgMax) * 100).toFixed(1)) : 0;
+        return {
+          Criterion: s.name,
+          Category: 'Sub Criterion',
+          AverageScore: `${avgScore} / ${avgMax}`,
+          AveragePercentage: `${avgPct}%`,
+          Evaluations: s.count,
+          rawScore: avgScore,
+          rawPct: avgPct,
+        };
+      });
+
+      // Group main criteria
+      const mainMap = new Map<string, { name: string; totalScore: number; totalMax: number; count: number; weight: number }>();
+      allMainResults.forEach((mr) => {
+        const key = mr.mainCriterionName;
+        const existing = mainMap.get(key) || { name: key, totalScore: 0, totalMax: 0, count: 0, weight: mr.weightPercentage };
+        existing.totalScore += mr.score;
+        existing.totalMax += mr.maxScore;
+        existing.count += 1;
+        mainMap.set(key, existing);
+      });
+
+      const mainBreakdown = Array.from(mainMap.values()).map((m) => {
+        const avgScore = Number((m.totalScore / m.count).toFixed(2));
+        const avgMax = Number((m.totalMax / m.count).toFixed(2));
+        const avgPct = avgMax > 0 ? Number(((avgScore / avgMax) * 100).toFixed(1)) : 0;
+        return {
+          Criterion: m.name,
+          Category: 'Main Criterion',
+          AverageScore: `${avgScore} / ${avgMax}`,
+          AveragePercentage: `${avgPct}%`,
+          Weight: `${m.weight}%`,
+          Evaluations: m.count,
+          rawScore: avgScore,
+          rawPct: avgPct,
+        };
+      });
+
+      const sortedSubs = [...subBreakdown].sort((a, b) => a.rawPct - b.rawPct);
+      const weakestAreas = sortedSubs.slice(0, 3);
+      const strongestAreas = [...sortedSubs].reverse().slice(0, 3);
+
       return {
-        data: obs.length > 0
-          ? [
-              { Criterion: 'Technical Knowledge & Architecture', AverageScore: '9.1/10', Weight: '25%', Evaluations: obs.length },
-              { Criterion: 'Content Accuracy & Code Quality', AverageScore: '8.6/10', Weight: '20%', Evaluations: obs.length },
-              { Criterion: 'Live Demonstration & Problem Solving', AverageScore: '8.4/10', Weight: '20%', Evaluations: obs.length },
-              { Criterion: 'Student Engagement & Interaction', AverageScore: '8.7/10', Weight: '20%', Evaluations: obs.length },
-              { Criterion: 'Classroom & Time Management', AverageScore: '8.2/10', Weight: '15%', Evaluations: obs.length },
-            ]
-          : [],
+        data: [...mainBreakdown, ...subBreakdown],
+        mainCriteriaBreakdown: mainBreakdown,
+        subCriteriaBreakdown: subBreakdown,
+        weakestAreas,
+        strongestAreas,
       };
     }
 

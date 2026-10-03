@@ -49,6 +49,15 @@ export const ReportsPage: React.FC = () => {
   const [endDate, setEndDate] = useState<string>('');
   const [isLoading, setIsLoading] = useState(true);
 
+  // Hierarchical Criteria Report State
+  const [criteriaMeta, setCriteriaMeta] = useState<{
+    mainCriteriaBreakdown?: any[];
+    subCriteriaBreakdown?: any[];
+    weakestAreas?: any[];
+    strongestAreas?: any[];
+  }>({});
+  const [criteriaFilter, setCriteriaFilter] = useState<'ALL' | 'MAIN' | 'SUB'>('ALL');
+
   const fetchMetaAndReport = async () => {
     try {
       setIsLoading(true);
@@ -62,6 +71,14 @@ export const ReportsPage: React.FC = () => {
       ]);
       setTracks(meta.tracks);
       setReportData(res.data);
+      if (activeReport === 'CRITERIA_ANALYSIS') {
+        setCriteriaMeta({
+          mainCriteriaBreakdown: res.mainCriteriaBreakdown,
+          subCriteriaBreakdown: res.subCriteriaBreakdown,
+          weakestAreas: res.weakestAreas,
+          strongestAreas: res.strongestAreas,
+        });
+      }
     } catch (err) {
       console.error('Failed to load report:', err);
     } finally {
@@ -270,6 +287,89 @@ export const ReportsPage: React.FC = () => {
         </button>
       </div>
 
+      {/* Hierarchical Criteria Intelligence (when CRITERIA_ANALYSIS is selected) */}
+      {activeReport === 'CRITERIA_ANALYSIS' && (
+        <div className="space-y-4">
+          {/* Weakest & Strongest Areas Overview */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-4 dark:border-emerald-900/50 dark:bg-emerald-950/20">
+              <div className="flex items-center gap-2 mb-2 text-emerald-800 dark:text-emerald-300 font-bold text-xs uppercase tracking-wider">
+                <Sparkles className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                Strongest Competency Areas (Top 3)
+              </div>
+              {criteriaMeta.strongestAreas && criteriaMeta.strongestAreas.length > 0 ? (
+                <div className="space-y-1.5">
+                  {criteriaMeta.strongestAreas.map((item: any, i: number) => (
+                    <div key={i} className="flex items-center justify-between text-xs bg-white dark:bg-slate-800 px-3 py-1.5 rounded-lg border border-emerald-100 dark:border-emerald-900/30">
+                      <span className="font-semibold text-slate-800 dark:text-slate-200">{item.Criterion}</span>
+                      <span className="font-bold text-emerald-600 dark:text-emerald-400 font-mono">{item.AveragePercentage}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-slate-500 italic">No observation data recorded yet.</p>
+              )}
+            </div>
+
+            <div className="rounded-xl border border-rose-200 bg-rose-50/50 p-4 dark:border-rose-900/50 dark:bg-rose-950/20">
+              <div className="flex items-center gap-2 mb-2 text-rose-800 dark:text-rose-300 font-bold text-xs uppercase tracking-wider">
+                <TrendingUp className="h-4 w-4 text-rose-600 dark:text-rose-400" />
+                Priority Development Areas (Weakest 3)
+              </div>
+              {criteriaMeta.weakestAreas && criteriaMeta.weakestAreas.length > 0 ? (
+                <div className="space-y-1.5">
+                  {criteriaMeta.weakestAreas.map((item: any, i: number) => (
+                    <div key={i} className="flex items-center justify-between text-xs bg-white dark:bg-slate-800 px-3 py-1.5 rounded-lg border border-rose-100 dark:border-rose-900/30">
+                      <span className="font-semibold text-slate-800 dark:text-slate-200">{item.Criterion}</span>
+                      <span className="font-bold text-rose-600 dark:text-rose-400 font-mono">{item.AveragePercentage}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-slate-500 italic">No observation data recorded yet.</p>
+              )}
+            </div>
+          </div>
+
+          {/* Hierarchy Filter Toggle */}
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">Display Level:</span>
+            <div className="inline-flex rounded-lg border border-slate-200 bg-white p-1 text-xs dark:border-slate-800 dark:bg-slate-900">
+              <button
+                onClick={() => setCriteriaFilter('ALL')}
+                className={`rounded px-3 py-1 font-medium transition ${
+                  criteriaFilter === 'ALL'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'
+                }`}
+              >
+                All Hierarchies
+              </button>
+              <button
+                onClick={() => setCriteriaFilter('MAIN')}
+                className={`rounded px-3 py-1 font-medium transition ${
+                  criteriaFilter === 'MAIN'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'
+                }`}
+              >
+                Main Criteria Only
+              </button>
+              <button
+                onClick={() => setCriteriaFilter('SUB')}
+                className={`rounded px-3 py-1 font-medium transition ${
+                  criteriaFilter === 'SUB'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'
+                }`}
+              >
+                Sub Criteria Only
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Visual Chart Section */}
       <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <h3 className="text-sm font-bold text-slate-900 dark:text-white mb-3 flex items-center gap-2">
@@ -298,7 +398,15 @@ export const ReportsPage: React.FC = () => {
               </LineChart>
             ) : (
               <BarChart
-                data={reportData}
+                data={
+                  activeReport === 'CRITERIA_ANALYSIS'
+                    ? (criteriaFilter === 'MAIN'
+                        ? criteriaMeta.mainCriteriaBreakdown || []
+                        : criteriaFilter === 'SUB'
+                        ? criteriaMeta.subCriteriaBreakdown || []
+                        : reportData)
+                    : reportData
+                }
                 margin={{ top: 10, right: 30, left: 0, bottom: 20 }}
               >
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
@@ -310,7 +418,7 @@ export const ReportsPage: React.FC = () => {
                       ? 'trackName'
                       : activeReport === 'OBSERVER_PERFORMANCE'
                       ? 'observerName'
-                      : 'criterionName'
+                      : 'Criterion'
                   }
                   stroke="#64748b"
                   fontSize={10}
@@ -318,7 +426,11 @@ export const ReportsPage: React.FC = () => {
                   angle={-15}
                   textAnchor="end"
                 />
-                <YAxis domain={[0, 10]} stroke="#64748b" fontSize={11} />
+                <YAxis
+                  domain={activeReport === 'CRITERIA_ANALYSIS' ? [0, 100] : [0, 10]}
+                  stroke="#64748b"
+                  fontSize={11}
+                />
                 <Tooltip
                   contentStyle={{
                     backgroundColor: '#1e293b',
@@ -329,15 +441,20 @@ export const ReportsPage: React.FC = () => {
                 />
                 <Bar
                   dataKey={
-                    activeReport === 'INSTRUCTOR_PERFORMANCE' ||
-                    activeReport === 'TRACK_PERFORMANCE' ||
                     activeReport === 'CRITERIA_ANALYSIS'
+                      ? 'rawPct'
+                      : activeReport === 'INSTRUCTOR_PERFORMANCE' ||
+                        activeReport === 'TRACK_PERFORMANCE'
                       ? 'averageScore'
                       : 'averageScoreIssued'
                   }
                   fill="#4f46e5"
                   radius={[4, 4, 0, 0]}
-                  name="Average Score (out of 10)"
+                  name={
+                    activeReport === 'CRITERIA_ANALYSIS'
+                      ? 'Average Mastery (%)'
+                      : 'Average Score (out of 10)'
+                  }
                 />
               </BarChart>
             )}
@@ -346,52 +463,79 @@ export const ReportsPage: React.FC = () => {
       </div>
 
       {/* Tabular Report Section */}
-      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
-        <div className="border-b border-slate-200 px-5 py-3 dark:border-slate-800 flex items-center justify-between">
-          <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-            Tabular Report Data ({reportData.length} records)
-          </h4>
-        </div>
+      {(() => {
+        const displayedRows =
+          activeReport === 'CRITERIA_ANALYSIS'
+            ? criteriaFilter === 'MAIN'
+              ? criteriaMeta.mainCriteriaBreakdown || []
+              : criteriaFilter === 'SUB'
+              ? criteriaMeta.subCriteriaBreakdown || []
+              : reportData
+            : reportData;
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead>
-              <tr className="border-b border-slate-200 bg-slate-50 font-semibold text-slate-600 dark:border-slate-800 dark:bg-slate-800/60 dark:text-slate-300">
-                {reportData.length > 0 &&
-                  Object.keys(reportData[0]).map((key) => (
-                    <th key={key} className="py-3 px-4 capitalize">
-                      {key.replace(/([A-Z])/g, ' $1')}
-                    </th>
-                  ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-              {isLoading ? (
-                <tr>
-                  <td colSpan={8} className="py-8 text-center text-slate-400">
-                    <RefreshCw className="h-5 w-5 animate-spin mx-auto text-indigo-600 mb-1" />
-                    Loading report...
-                  </td>
-                </tr>
-              ) : (
-                reportData.map((row, idx) => (
-                  <tr key={idx} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
-                    {Object.values(row).map((val: any, valIdx) => (
-                      <td key={valIdx} className="py-3 px-4 text-slate-800 dark:text-slate-200 font-medium">
-                        {typeof val === 'number' ? (
-                          <span className="font-mono">{val}</span>
-                        ) : (
-                          String(val)
-                        )}
-                      </td>
-                    ))}
+        return (
+          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <div className="border-b border-slate-200 px-5 py-3 dark:border-slate-800 flex items-center justify-between">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                Tabular Report Data ({displayedRows.length} records)
+              </h4>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50 font-semibold text-slate-600 dark:border-slate-800 dark:bg-slate-800/60 dark:text-slate-300">
+                    {displayedRows.length > 0 &&
+                      Object.keys(displayedRows[0])
+                        .filter((k) => !k.startsWith('raw'))
+                        .map((key) => (
+                          <th key={key} className="py-3 px-4 capitalize">
+                            {key.replace(/([A-Z])/g, ' $1')}
+                          </th>
+                        ))}
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {isLoading ? (
+                    <tr>
+                      <td colSpan={8} className="py-8 text-center text-slate-400">
+                        <RefreshCw className="h-5 w-5 animate-spin mx-auto text-indigo-600 mb-1" />
+                        Loading report...
+                      </td>
+                    </tr>
+                  ) : displayedRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="py-8 text-center text-slate-400 italic">
+                        No report data matching selected parameters.
+                      </td>
+                    </tr>
+                  ) : (
+                    displayedRows.map((row: any, idx: number) => {
+                      const visibleKeys = Object.keys(row).filter((k) => !k.startsWith('raw'));
+                      return (
+                        <tr key={idx} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
+                          {visibleKeys.map((k, valIdx) => {
+                            const val = row[k];
+                            return (
+                              <td key={valIdx} className="py-3 px-4 text-slate-800 dark:text-slate-200 font-medium">
+                                {typeof val === 'number' ? (
+                                  <span className="font-mono">{val}</span>
+                                ) : (
+                                  String(val)
+                                )}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };

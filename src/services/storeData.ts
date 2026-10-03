@@ -6,6 +6,8 @@ import {
   ObservationTemplate,
   ObservationTemplateVersion,
   ObservationCriterion,
+  MainCriterion,
+  SubCriterion,
   Observation,
   KpiDefinition,
   KpiScorecard,
@@ -48,6 +50,8 @@ export const initialImprovementPlans: InstructorImprovementPlan[] = [];
 export const initialStudentFeedback: StudentFeedbackRecord[] = [];
 export const initialAuditLogs: AuditLog[] = [];
 export const initialCriteria: ObservationCriterion[] = [];
+export const initialMainCriteria: MainCriterion[] = [];
+export const initialSubCriteria: SubCriterion[] = [];
 export const initialVersions: ObservationTemplateVersion[] = [];
 export const initialTemplates: ObservationTemplate[] = [];
 export const initialKpis: KpiDefinition[] = [];

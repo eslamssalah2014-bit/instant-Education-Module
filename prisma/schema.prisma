@@ -106,6 +106,7 @@ model ObservationTemplate {
   name             String
   type             ObservationType
   description      String
+  totalScore       Float                        @default(100.0)
   isActive         Boolean                      @default(true)
   isArchived       Boolean                      @default(false)
   currentVersionId String?
@@ -118,21 +119,60 @@ model ObservationTemplate {
 }
 
 model ObservationTemplateVersion {
-  id            String                 @id @default(uuid())
+  id            String                      @id @default(uuid())
   templateId    String
   versionNumber String
   changeLog     String
+  totalScore    Float                       @default(100.0)
   createdById   String
-  isActive      Boolean                @default(true)
-  createdAt     DateTime               @default(now())
+  isActive      Boolean                     @default(true)
+  createdAt     DateTime                    @default(now())
   observations  Observation[]
   criteria      ObservationCriterion[]
-  createdBy     User                   @relation("VersionCreator", fields: [createdById], references: [id])
-  template      ObservationTemplate    @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  mainCriteria  ObservationMainCriterion[]
+  createdBy     User                        @relation("VersionCreator", fields: [createdById], references: [id])
+  template      ObservationTemplate         @relation(fields: [templateId], references: [id], onDelete: Cascade)
 
   @@unique([templateId, versionNumber])
   @@index([templateId])
   @@index([isActive])
+}
+
+model ObservationMainCriterion {
+  id                String                     @id @default(uuid())
+  templateVersionId String
+  name              String
+  description       String
+  weightPercentage  Float
+  calculatedScore   Float                      @default(0.0)
+  orderIndex        Int                        @default(0)
+  isActive          Boolean                    @default(true)
+  createdAt         DateTime                   @default(now())
+  updatedAt         DateTime                   @updatedAt
+  templateVersion   ObservationTemplateVersion @relation(fields: [templateVersionId], references: [id], onDelete: Cascade)
+  subCriteria       ObservationSubCriterion[]
+  mainResults       ObservationMainResult[]
+
+  @@index([templateVersionId])
+  @@index([orderIndex])
+}
+
+model ObservationSubCriterion {
+  id               String                   @id @default(uuid())
+  mainCriterionId  String
+  name             String
+  description      String
+  weightPercentage Float
+  calculatedScore  Float                    @default(0.0)
+  orderIndex       Int                      @default(0)
+  isActive         Boolean                  @default(true)
+  createdAt        DateTime                 @default(now())
+  updatedAt        DateTime                 @updatedAt
+  mainCriterion    ObservationMainCriterion @relation(fields: [mainCriterionId], references: [id], onDelete: Cascade)
+  subResults       ObservationSubResult[]
+
+  @@index([mainCriterionId])
+  @@index([orderIndex])
 }
 
 model ObservationCriterion {
@@ -163,6 +203,7 @@ model Observation {
   trackId           String
   observationDate   DateTime                   @default(now())
   status            ObservationStatus          @default(SUBMITTED)
+  maxScore          Float                      @default(100.0)
   totalScore        Float                      @default(0.0)
   weightedScore     Float                      @default(0.0)
   percentageScore   Float                      @default(0.0)
@@ -176,6 +217,8 @@ model Observation {
   track             Track                      @relation(fields: [trackId], references: [id])
   feedback          ObservationFeedback?
   scores            ObservationScore[]
+  mainResults       ObservationMainResult[]
+  subResults        ObservationSubResult[]
 
   @@index([instructorId])
   @@index([observerId])
@@ -183,6 +226,43 @@ model Observation {
   @@index([groupId])
   @@index([observationDate])
   @@index([status])
+}
+
+model ObservationMainResult {
+  id                String                   @id @default(uuid())
+  observationId     String
+  mainCriterionId   String
+  mainCriterionName String
+  weightPercentage  Float
+  maxScore          Float
+  score             Float
+  percentage        Float
+  createdAt         DateTime                 @default(now())
+  observation       Observation              @relation(fields: [observationId], references: [id], onDelete: Cascade)
+  mainCriterion     ObservationMainCriterion @relation(fields: [mainCriterionId], references: [id])
+
+  @@unique([observationId, mainCriterionId])
+  @@index([observationId])
+  @@index([mainCriterionId])
+}
+
+model ObservationSubResult {
+  id               String                  @id @default(uuid())
+  observationId    String
+  mainCriterionId  String
+  subCriterionId   String
+  subCriterionName String
+  weightPercentage Float
+  maxScore         Float
+  score            Float
+  feedback         String?
+  createdAt        DateTime                @default(now())
+  observation      Observation             @relation(fields: [observationId], references: [id], onDelete: Cascade)
+  subCriterion     ObservationSubCriterion @relation(fields: [subCriterionId], references: [id])
+
+  @@unique([observationId, subCriterionId])
+  @@index([observationId])
+  @@index([subCriterionId])
 }
 
 model ObservationScore {

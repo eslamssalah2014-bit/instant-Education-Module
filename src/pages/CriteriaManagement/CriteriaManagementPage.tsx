@@ -17,18 +17,32 @@ import {
   Sparkles,
   RefreshCw,
   X,
+  Calculator,
+  ChevronRight,
+  HelpCircle,
+  Percent,
 } from 'lucide-react';
 import { api } from '../../services/api';
-import { ObservationTemplate, ObservationTemplateVersion, ObservationCriterion, ObservationType } from '../../types';
+import { ObservationTemplate, ObservationTemplateVersion, ObservationType } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 
-interface EditableCriterion {
+interface EditableSubCriterion {
   id?: string;
   name: string;
   description: string;
-  weightPercentage: number;
+  weightPercentage: number; // % of parent main criterion
   orderIndex: number;
   isActive: boolean;
+}
+
+interface EditableMainCriterion {
+  id?: string;
+  name: string;
+  description: string;
+  weightPercentage: number; // % of master total observation score
+  orderIndex: number;
+  isActive: boolean;
+  subCriteria: EditableSubCriterion[];
 }
 
 export const CriteriaManagementPage: React.FC = () => {
@@ -38,15 +52,17 @@ export const CriteriaManagementPage: React.FC = () => {
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
   const [isLoading, setIsLoading] = useState(true);
 
-  // Criteria editing state
-  const [criteriaList, setCriteriaList] = useState<EditableCriterion[]>([]);
+  // Template Master Score & Hierarchical Criteria State
+  const [templateTotalScore, setTemplateTotalScore] = useState<number>(100);
+  const [mainCriteriaList, setMainCriteriaList] = useState<EditableMainCriterion[]>([]);
   const [versionNumber, setVersionNumber] = useState('');
   const [changeLog, setChangeLog] = useState('');
   const [showVersionModal, setShowVersionModal] = useState(false);
   const [showCreateTemplateModal, setShowCreateTemplateModal] = useState(false);
   const [showVersionHistoryModal, setShowVersionHistoryModal] = useState(false);
 
-  // New Template state
+  // New Template Modal state with mandatory "Total Observation Score" first step
+  const [newTemplateTotalScore, setNewTemplateTotalScore] = useState<number>(100);
   const [newTemplateName, setNewTemplateName] = useState('');
   const [newTemplateCode, setNewTemplateCode] = useState('');
   const [newTemplateType, setNewTemplateType] = useState<ObservationType>('TECHNICAL');
@@ -76,20 +92,75 @@ export const CriteriaManagementPage: React.FC = () => {
   const selectedTemplate = templates.find((t) => t.id === selectedTemplateId) || templates[0];
 
   useEffect(() => {
-    if (selectedTemplate?.currentVersion?.criteria) {
-      setCriteriaList(
-        selectedTemplate.currentVersion.criteria.map((c) => ({
-          id: c.id,
-          name: c.name,
-          description: c.description,
-          weightPercentage: c.weightPercentage,
-          orderIndex: c.orderIndex,
-          isActive: c.isActive,
-        }))
-      );
-      // Auto-suggest next version number (e.g., v1.1 -> v1.2)
-      const currentVer = selectedTemplate.currentVersion.versionNumber;
-      const parts = currentVer.replace('v', '').split('.');
+    if (selectedTemplate) {
+      const currentVer = selectedTemplate.currentVersion;
+      const masterScore = currentVer?.totalScore || selectedTemplate.totalScore || 100;
+      setTemplateTotalScore(masterScore);
+
+      if (currentVer?.mainCriteria && currentVer.mainCriteria.length > 0) {
+        setMainCriteriaList(
+          currentVer.mainCriteria.map((mc) => ({
+            id: mc.id,
+            name: mc.name,
+            description: mc.description,
+            weightPercentage: mc.weightPercentage,
+            orderIndex: mc.orderIndex,
+            isActive: mc.isActive,
+            subCriteria: (mc.subCriteria || []).map((sc) => ({
+              id: sc.id,
+              name: sc.name,
+              description: sc.description,
+              weightPercentage: sc.weightPercentage,
+              orderIndex: sc.orderIndex,
+              isActive: sc.isActive,
+            })),
+          }))
+        );
+      } else {
+        // Fallback default hierarchical criteria conforming to user specification:
+        // Total = 100: Technical Competence 50%, Student Engagement 30%, Classroom Management 20%
+        setMainCriteriaList([
+          {
+            name: 'Technical Competence',
+            description: 'Demonstrates deep mastery of the subject matter and engineering architecture.',
+            weightPercentage: 50,
+            orderIndex: 1,
+            isActive: true,
+            subCriteria: [
+              { name: 'Teaching Skills', description: 'Pedagogical execution and learning scaffolding', weightPercentage: 40, orderIndex: 1, isActive: true },
+              { name: 'Presentation Skills', description: 'Clarity of speech, pacing, and visual aids', weightPercentage: 30, orderIndex: 2, isActive: true },
+              { name: 'Subject Knowledge', description: 'Technical mastery and conceptual depth', weightPercentage: 20, orderIndex: 3, isActive: true },
+              { name: 'Problem Solving', description: 'Live coding, debugging, and answering student blockers', weightPercentage: 10, orderIndex: 4, isActive: true },
+            ],
+          },
+          {
+            name: 'Student Engagement',
+            description: 'Fosters active participation, inquiry-based discussions, and inclusive classroom dialogue.',
+            weightPercentage: 30,
+            orderIndex: 2,
+            isActive: true,
+            subCriteria: [
+              { name: 'Interactive Questioning', description: 'Regular checks for understanding and discussion prompts', weightPercentage: 50, orderIndex: 1, isActive: true },
+              { name: 'Inclusive Participation', description: 'Ensuring all student tiers contribute actively', weightPercentage: 50, orderIndex: 2, isActive: true },
+            ],
+          },
+          {
+            name: 'Classroom & Time Management',
+            description: 'Manages lesson pacing, schedule milestones, and learning environment readiness.',
+            weightPercentage: 20,
+            orderIndex: 3,
+            isActive: true,
+            subCriteria: [
+              { name: 'Pacing & Schedule Adherence', description: 'Covers topic agenda on time and leaves room for questions', weightPercentage: 50, orderIndex: 1, isActive: true },
+              { name: 'Classroom Readiness', description: 'IDE, repositories, and learning assets ready before class', weightPercentage: 50, orderIndex: 2, isActive: true },
+            ],
+          },
+        ]);
+      }
+
+      // Auto-suggest next version number
+      const verStr = currentVer?.versionNumber || 'v1.0';
+      const parts = verStr.replace('v', '').split('.');
       if (parts.length >= 2) {
         const nextMinor = parseInt(parts[1], 10) + 1;
         setVersionNumber(`v${parts[0]}.${nextMinor}`);
@@ -99,40 +170,66 @@ export const CriteriaManagementPage: React.FC = () => {
     }
   }, [selectedTemplateId, templates]);
 
-  // Total weight calculation
-  const totalWeight = criteriaList.reduce((sum, c) => sum + Number(c.weightPercentage || 0), 0);
-  const isWeightValid = Math.abs(totalWeight - 100) < 0.01;
+  // Main Criteria Weight & Validation
+  const totalMainWeight = mainCriteriaList.reduce((sum, mc) => sum + Number(mc.weightPercentage || 0), 0);
+  const remainingMainWeight = Number((100 - totalMainWeight).toFixed(1));
+  const isMainWeightValid = Math.abs(totalMainWeight - 100) < 0.05;
 
-  // Criteria Actions
-  const handleAddCriterion = () => {
-    const nextOrder = criteriaList.length + 1;
-    setCriteriaList((prev) => [
+  // Sub Criteria Validations
+  const subCriteriaValidationStatus = mainCriteriaList.map((mc) => {
+    const subSum = (mc.subCriteria || []).reduce((sum, sc) => sum + Number(sc.weightPercentage || 0), 0);
+    const remaining = Number((100 - subSum).toFixed(1));
+    const isValid = (mc.subCriteria || []).length > 0 && Math.abs(subSum - 100) < 0.05;
+    return {
+      mainCriterionName: mc.name,
+      subSum,
+      remaining,
+      isValid,
+    };
+  });
+
+  const allSubCriteriaValid = subCriteriaValidationStatus.every((s) => s.isValid);
+  const isEntireRubricValid = isMainWeightValid && allSubCriteriaValid && mainCriteriaList.length > 0;
+
+  // --- Main Criteria Handlers ---
+  const handleAddMainCriterion = () => {
+    const nextOrder = mainCriteriaList.length + 1;
+    setMainCriteriaList((prev) => [
       ...prev,
       {
-        name: `New Evaluation Criterion ${nextOrder}`,
-        description: 'Provide explicit observational criteria expectations...',
-        weightPercentage: 10,
+        name: `Main Criterion ${nextOrder}`,
+        description: 'Describe core performance expectations for this domain...',
+        weightPercentage: remainingMainWeight > 0 ? remainingMainWeight : 0,
         orderIndex: nextOrder,
         isActive: true,
+        subCriteria: [
+          {
+            name: 'Sub Criterion 1',
+            description: 'Specific observable behavioral indicators...',
+            weightPercentage: 100,
+            orderIndex: 1,
+            isActive: true,
+          },
+        ],
       },
     ]);
   };
 
-  const handleUpdateCriterion = (index: number, field: keyof EditableCriterion, val: any) => {
-    setCriteriaList((prev) => {
+  const handleUpdateMainCriterion = (index: number, field: keyof EditableMainCriterion, val: any) => {
+    setMainCriteriaList((prev) => {
       const copy = [...prev];
       copy[index] = { ...copy[index], [field]: val };
       return copy;
     });
   };
 
-  const handleDeleteCriterion = (index: number) => {
-    setCriteriaList((prev) => prev.filter((_, idx) => idx !== index));
+  const handleDeleteMainCriterion = (index: number) => {
+    setMainCriteriaList((prev) => prev.filter((_, idx) => idx !== index));
   };
 
-  const handleMoveUp = (index: number) => {
+  const handleMoveMainUp = (index: number) => {
     if (index === 0) return;
-    setCriteriaList((prev) => {
+    setMainCriteriaList((prev) => {
       const copy = [...prev];
       const temp = copy[index - 1];
       copy[index - 1] = copy[index];
@@ -141,9 +238,9 @@ export const CriteriaManagementPage: React.FC = () => {
     });
   };
 
-  const handleMoveDown = (index: number) => {
-    if (index === criteriaList.length - 1) return;
-    setCriteriaList((prev) => {
+  const handleMoveMainDown = (index: number) => {
+    if (index === mainCriteriaList.length - 1) return;
+    setMainCriteriaList((prev) => {
       const copy = [...prev];
       const temp = copy[index + 1];
       copy[index + 1] = copy[index];
@@ -152,15 +249,69 @@ export const CriteriaManagementPage: React.FC = () => {
     });
   };
 
+  // --- Sub Criteria Handlers ---
+  const handleAddSubCriterion = (mainIndex: number) => {
+    setMainCriteriaList((prev) => {
+      const copy = [...prev];
+      const targetMain = copy[mainIndex];
+      const nextSubOrder = targetMain.subCriteria.length + 1;
+      const currentSubSum = targetMain.subCriteria.reduce((sum, sc) => sum + Number(sc.weightPercentage || 0), 0);
+      const remainingSubWeight = Math.max(0, 100 - currentSubSum);
+
+      targetMain.subCriteria = [
+        ...targetMain.subCriteria,
+        {
+          name: `Sub Criterion ${nextSubOrder}`,
+          description: 'Detailed observational checkpoint and scoring guidance...',
+          weightPercentage: remainingSubWeight > 0 ? remainingSubWeight : 10,
+          orderIndex: nextSubOrder,
+          isActive: true,
+        },
+      ];
+      return copy;
+    });
+  };
+
+  const handleUpdateSubCriterion = (
+    mainIndex: number,
+    subIndex: number,
+    field: keyof EditableSubCriterion,
+    val: any
+  ) => {
+    setMainCriteriaList((prev) => {
+      const copy = [...prev];
+      const targetSub = copy[mainIndex].subCriteria[subIndex];
+      copy[mainIndex].subCriteria[subIndex] = { ...targetSub, [field]: val };
+      return copy;
+    });
+  };
+
+  const handleDeleteSubCriterion = (mainIndex: number, subIndex: number) => {
+    setMainCriteriaList((prev) => {
+      const copy = [...prev];
+      copy[mainIndex].subCriteria = copy[mainIndex].subCriteria.filter((_, idx) => idx !== subIndex);
+      return copy;
+    });
+  };
+
   // Version bump save
   const handleSaveVersion = async () => {
-    if (!isWeightValid) {
+    if (!isMainWeightValid) {
       setNotificationMsg({
-        text: `Total weights must equal exactly 100%. Current sum: ${totalWeight}%`,
+        text: `Total Main Criteria weight must equal exactly 100%. Current sum: ${totalMainWeight}%`,
         type: 'error',
       });
       return;
     }
+
+    if (!allSubCriteriaValid) {
+      setNotificationMsg({
+        text: 'All Sub-Criteria must equal exactly 100% inside their respective Main Criterion.',
+        type: 'error',
+      });
+      return;
+    }
+
     if (!changeLog.trim()) {
       setNotificationMsg({ text: 'Please enter a change log description for this version.', type: 'error' });
       return;
@@ -170,11 +321,15 @@ export const CriteriaManagementPage: React.FC = () => {
       await api.bumpTemplateVersion(selectedTemplate.id, {
         versionNumber,
         changeLog,
-        criteria: criteriaList,
+        totalScore: templateTotalScore,
+        mainCriteria: mainCriteriaList,
       });
       setShowVersionModal(false);
       setChangeLog('');
-      setNotificationMsg({ text: `Template upgraded to ${versionNumber} with version control!`, type: 'success' });
+      setNotificationMsg({
+        text: `Template upgraded to ${versionNumber} with hierarchical rubric validation!`,
+        type: 'success',
+      });
       await fetchTemplates();
     } catch (err: any) {
       setNotificationMsg({ text: err.message || 'Failed to update template version', type: 'error' });
@@ -220,7 +375,7 @@ export const CriteriaManagementPage: React.FC = () => {
 
   const handleCreateTemplate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newTemplateName || !newTemplateCode) return;
+    if (!newTemplateName.trim() || !newTemplateCode.trim()) return;
 
     try {
       const created = await api.createTemplate({
@@ -228,18 +383,17 @@ export const CriteriaManagementPage: React.FC = () => {
         code: newTemplateCode,
         type: newTemplateType,
         description: newTemplateDesc,
-        criteria: [
-          { name: 'Core Subject Matter Expertise', description: 'Demonstrates deep concept mastery', weightPercentage: 30, orderIndex: 1 },
-          { name: 'Clarity of Explanation', description: 'Explains complex topics clearly', weightPercentage: 30, orderIndex: 2 },
-          { name: 'Student Engagement & Interaction', description: 'Involves class in discussion', weightPercentage: 20, orderIndex: 3 },
-          { name: 'Pacing & Time Management', description: 'Covers agenda on schedule', weightPercentage: 20, orderIndex: 4 },
-        ],
+        totalScore: newTemplateTotalScore,
       });
       setShowCreateTemplateModal(false);
       setNewTemplateName('');
       setNewTemplateCode('');
       setNewTemplateDesc('');
-      setNotificationMsg({ text: `New template "${created.name}" created!`, type: 'success' });
+      setNewTemplateTotalScore(100);
+      setNotificationMsg({
+        text: `New template "${created.name}" created with Total Score = ${created.totalScore} Points!`,
+        type: 'success',
+      });
       await fetchTemplates();
       setSelectedTemplateId(created.id);
     } catch (err: any) {
@@ -248,18 +402,18 @@ export const CriteriaManagementPage: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6 pb-16">
+    <div className="space-y-6 pb-20">
       {/* Top Banner */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-xl font-bold tracking-tight text-slate-900 dark:text-white flex items-center gap-2">
-            Observation Criteria & Template Builder
-            <span className="text-xs font-semibold px-2 py-0.5 rounded bg-purple-50 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300">
-              Version Controlled
+            Observation Criteria Builder
+            <span className="text-xs font-semibold px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300">
+              Hierarchical Architecture
             </span>
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            Design rubrics, enforce 100% weight integrity, and maintain immutable audit versions for past evaluations.
+            Two-tier evaluation rubric (Main Criteria → Sub Criteria). Sub criteria weights scale exclusively from parent main criteria scores.
           </p>
         </div>
 
@@ -270,7 +424,7 @@ export const CriteriaManagementPage: React.FC = () => {
               className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700 transition"
             >
               <Plus className="h-4 w-4" />
-              <span>Create New Template</span>
+              <span>Create Observation Template</span>
             </button>
           </div>
         )}
@@ -298,516 +452,756 @@ export const CriteriaManagementPage: React.FC = () => {
         </div>
       )}
 
-      {/* Main Builder Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Templates Sidebar / Selector */}
-        <div className="lg:col-span-4 space-y-4">
-          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-3">
-              Evaluation Templates ({templates.length})
-            </h3>
+      {/* Template Selector & Master Controls */}
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-4">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-800">
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+              Active Template:
+            </label>
+            <select
+              value={selectedTemplateId}
+              onChange={(e) => setSelectedTemplateId(e.target.value)}
+              className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            >
+              {templates.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name} ({t.code}) — Total: {t.totalScore || 100} pts
+                </option>
+              ))}
+            </select>
 
-            <div className="space-y-2">
-              {templates.length === 0 && (
-                <div className="p-4 text-center text-xs text-slate-400 rounded-lg border border-dashed border-slate-200 dark:border-slate-800">
-                  No templates configured
-                </div>
-              )}
-              {templates.map((tmpl) => {
-                const isSelected = tmpl.id === selectedTemplateId;
-                return (
-                  <div
-                    key={tmpl.id}
-                    onClick={() => setSelectedTemplateId(tmpl.id)}
-                    className={`cursor-pointer rounded-xl border p-3.5 transition ${
-                      isSelected
-                        ? 'border-indigo-500 bg-indigo-50/50 shadow-sm dark:border-indigo-500 dark:bg-indigo-950/40'
-                        : 'border-slate-200 bg-white hover:border-slate-300 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h4 className="font-bold text-xs text-slate-900 dark:text-white">
-                            {tmpl.name}
-                          </h4>
-                        </div>
-                        <span className="text-[10px] font-mono text-slate-400 mt-0.5 block">
-                          {tmpl.code} • {tmpl.type}
-                        </span>
-                      </div>
-                      <span
-                        className={`text-[9px] px-1.5 py-0.5 rounded font-bold font-mono ${
-                          tmpl.isActive
-                            ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
-                            : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
-                        }`}
-                      >
-                        {tmpl.isActive ? 'ACTIVE' : 'INACTIVE'}
-                      </span>
-                    </div>
+            <span className="text-xs font-mono px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-semibold">
+              {selectedTemplate?.currentVersion?.versionNumber || 'v1.0'}
+            </span>
 
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-2 line-clamp-2">
-                      {tmpl.description}
-                    </p>
+            {selectedTemplate && (
+              <span
+                className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${
+                  selectedTemplate.isActive
+                    ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                    : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+                }`}
+              >
+                {selectedTemplate.isActive ? 'Active Rubric' : 'Inactive'}
+              </span>
+            )}
+          </div>
 
-                    <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-2 dark:border-slate-800/80 text-[10px]">
-                      <span className="font-semibold text-indigo-600 dark:text-indigo-400 flex items-center gap-1">
-                        <GitBranch className="h-3 w-3" /> {tmpl.currentVersion?.versionNumber || 'v1.0'}
-                      </span>
-                      <span className="text-slate-400">
-                        {tmpl.currentVersion?.criteria?.length || 0} criteria
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowVersionHistoryModal(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+            >
+              <History className="h-3.5 w-3.5 text-slate-500" />
+              <span>Version History</span>
+            </button>
+
+            {isEducationManager && selectedTemplate && (
+              <>
+                <button
+                  onClick={() => handleCloneTemplate(selectedTemplate.id)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                  title="Clone Template"
+                >
+                  <Copy className="h-3.5 w-3.5 text-slate-500" />
+                  <span>Clone</span>
+                </button>
+
+                <button
+                  onClick={() => handleToggleStatus(selectedTemplate)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                  title="Toggle Status"
+                >
+                  <Power className="h-3.5 w-3.5 text-slate-500" />
+                  <span>{selectedTemplate.isActive ? 'Deactivate' : 'Activate'}</span>
+                </button>
+
+                <button
+                  onClick={() => handleArchive(selectedTemplate)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                  title="Archive / Restore"
+                >
+                  <Archive className="h-3.5 w-3.5 text-slate-500" />
+                  <span>{selectedTemplate.isArchived ? 'Restore' : 'Archive'}</span>
+                </button>
+              </>
+            )}
           </div>
         </div>
 
-        {/* Selected Template Editor */}
-        {!selectedTemplate && (
-          <div className="lg:col-span-8 flex flex-col items-center justify-center p-12 rounded-xl border border-dashed border-slate-300 dark:border-slate-800 bg-white/50 dark:bg-slate-900/50 text-center">
-            <FileCheck2 className="h-12 w-12 text-slate-400 mb-3 opacity-60" />
-            <h3 className="text-base font-bold text-slate-900 dark:text-white">No Evaluation Templates Configured</h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-sm">
-              All previous templates have been purged. Create a new rubric template to define criteria and weights for faculty observations.
+        {/* Master Score & Weight Validation Dashboard */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-1">
+          {/* Total Observation Score */}
+          <div className="rounded-xl border border-indigo-200 bg-indigo-50/50 p-4 dark:border-indigo-900/50 dark:bg-indigo-950/20">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-700 dark:text-indigo-400 flex items-center gap-1">
+              <Calculator className="h-3.5 w-3.5" /> Total Observation Score
+            </span>
+            <div className="flex items-center gap-2 mt-2">
+              <input
+                type="number"
+                min="1"
+                max="1000"
+                value={templateTotalScore}
+                onChange={(e) => setTemplateTotalScore(Number(e.target.value) || 100)}
+                disabled={!isEducationManager}
+                className="w-24 rounded-lg border border-indigo-300 bg-white px-2.5 py-1 text-xl font-mono font-black text-indigo-600 dark:border-indigo-700 dark:bg-slate-800 dark:text-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+              <span className="text-xs font-bold text-slate-600 dark:text-slate-300">Master Points</span>
+            </div>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+              Master denominator for all criteria.
             </p>
+          </div>
+
+          {/* Main Criteria Total Weight */}
+          <div className="rounded-xl border border-slate-200 bg-slate-50/50 p-4 dark:border-slate-800 dark:bg-slate-800/20">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+              Main Criteria Weight
+            </span>
+            <div className="flex items-baseline gap-2 mt-2">
+              <span className="text-2xl font-mono font-black text-slate-900 dark:text-white">
+                {totalMainWeight}%
+              </span>
+              <span className="text-xs text-slate-500">of 100% target</span>
+            </div>
+            <div className="mt-1">
+              {isMainWeightValid ? (
+                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-600 dark:text-emerald-400">
+                  <CheckCircle2 className="h-3.5 w-3.5" /> ✓ Valid (100% Complete)
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-600 dark:text-rose-400">
+                  <AlertTriangle className="h-3.5 w-3.5" /> ✗ Invalid ({remainingMainWeight > 0 ? `${remainingMainWeight}% remaining` : `${Math.abs(remainingMainWeight)}% over`})
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Sub-Criteria Validation State */}
+          <div className="rounded-xl border border-slate-200 bg-slate-50/50 p-4 dark:border-slate-800 dark:bg-slate-800/20">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+              Sub-Criteria Integrity
+            </span>
+            <div className="flex items-baseline gap-2 mt-2">
+              <span className="text-2xl font-mono font-black text-slate-900 dark:text-white">
+                {subCriteriaValidationStatus.filter((s) => s.isValid).length} / {mainCriteriaList.length}
+              </span>
+              <span className="text-xs text-slate-500">Categories Valid</span>
+            </div>
+            <div className="mt-1">
+              {allSubCriteriaValid ? (
+                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-600 dark:text-emerald-400">
+                  <CheckCircle2 className="h-3.5 w-3.5" /> ✓ All Sub-Criteria 100%
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-600 dark:text-rose-400">
+                  <AlertTriangle className="h-3.5 w-3.5" /> ✗ Weights Need Balancing
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Save Version Action */}
+          <div className="rounded-xl border border-slate-200 bg-gradient-to-br from-indigo-50/50 via-purple-50/30 to-white p-4 dark:border-slate-800 dark:from-indigo-950/20 dark:via-purple-950/10 dark:to-slate-900 flex flex-col justify-between">
+            <div>
+              <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-700 dark:text-indigo-400">
+                Rubric Status
+              </span>
+              <div className="text-xs font-semibold text-slate-700 dark:text-slate-300 mt-1">
+                {isEntireRubricValid ? 'Ready to publish / bump' : 'Fix invalid weights to save'}
+              </div>
+            </div>
+
             {isEducationManager && (
               <button
-                onClick={() => setShowCreateTemplateModal(true)}
-                className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700"
+                onClick={() => setShowVersionModal(true)}
+                disabled={!isEntireRubricValid}
+                className="w-full mt-2 inline-flex items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-indigo-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <Plus className="h-4 w-4" />
-                Create Evaluation Template
+                <Save className="h-4 w-4" />
+                <span>Save New Version ({versionNumber})</span>
               </button>
             )}
           </div>
-        )}
-        {selectedTemplate && (
-          <div className="lg:col-span-8 space-y-5">
-            {/* Header info bar of the selected template */}
-            <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4 dark:border-slate-800">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                      {selectedTemplate.name}
-                    </h3>
-                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-mono font-bold text-slate-700 dark:bg-slate-800 dark:text-slate-300">
-                      {selectedTemplate.currentVersion?.versionNumber}
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                    {selectedTemplate.description}
-                  </p>
-                </div>
+        </div>
+      </div>
 
-                {isEducationManager && (
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <button
-                      onClick={() => setShowVersionHistoryModal(true)}
-                      className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
-                      title="View Version Audit History"
-                    >
-                      <History className="h-3.5 w-3.5 text-slate-500" />
-                      <span>History</span>
-                    </button>
+      {/* Main Criteria Cards List */}
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <Layers className="h-4 w-4 text-indigo-600" />
+              Main Criteria Cards ({mainCriteriaList.length})
+            </h3>
+            <span className="text-xs text-slate-500">
+              Each Main Criterion has independent Sub Criteria calculated strictly from its score.
+            </span>
+          </div>
 
-                    <button
-                      onClick={() => handleCloneTemplate(selectedTemplate.id)}
-                      className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
-                      title="Duplicate Template"
-                    >
-                      <Copy className="h-3.5 w-3.5 text-slate-500" />
-                      <span>Duplicate</span>
-                    </button>
+          {isEducationManager && (
+            <button
+              onClick={handleAddMainCriterion}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-bold text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:text-indigo-300 transition"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span>Add Main Criterion</span>
+            </button>
+          )}
+        </div>
 
-                    <button
-                      onClick={() => handleToggleStatus(selectedTemplate)}
-                      className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition ${
-                        selectedTemplate.isActive
-                          ? 'border-emerald-200 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-300'
-                          : 'border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400'
-                      }`}
-                      title="Toggle Active State"
-                    >
-                      <Power className="h-3.5 w-3.5" />
-                      <span>{selectedTemplate.isActive ? 'Active' : 'Deactivated'}</span>
-                    </button>
+        {mainCriteriaList.length === 0 ? (
+          <div className="rounded-2xl border-2 border-dashed border-slate-200 dark:border-slate-800 p-12 text-center">
+            <Layers className="h-10 w-10 text-slate-400 mx-auto mb-3" />
+            <h4 className="text-sm font-bold text-slate-800 dark:text-slate-200">No Main Criteria Defined</h4>
+            <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
+              Start building your evaluation rubric by adding your first Main Criterion card.
+            </p>
+            <button
+              onClick={handleAddMainCriterion}
+              className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold text-white hover:bg-indigo-700 shadow-sm"
+            >
+              <Plus className="h-4 w-4" />
+              <span>Add Main Criterion</span>
+            </button>
+          </div>
+        ) : (
+          mainCriteriaList.map((mc, mIdx) => {
+            // Main Criterion Calculated Score
+            const mainCalculatedScore = Number(((mc.weightPercentage / 100) * templateTotalScore).toFixed(2));
+            const subSum = (mc.subCriteria || []).reduce((sum, sc) => sum + Number(sc.weightPercentage || 0), 0);
+            const remainingSubWeight = Number((100 - subSum).toFixed(1));
+            const isSubValid = (mc.subCriteria || []).length > 0 && Math.abs(subSum - 100) < 0.05;
 
-                    <button
-                      onClick={() => handleArchive(selectedTemplate)}
-                      className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:bg-rose-50 hover:text-rose-600 dark:border-slate-700 dark:hover:bg-rose-950/30"
-                      title="Archive Template"
-                    >
-                      <Archive className="h-3.5 w-3.5" />
-                      <span>{selectedTemplate.isArchived ? 'Unarchive' : 'Archive'}</span>
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {/* Weight Management Validation Progress Bar */}
-              <div className="mt-4 rounded-xl border p-4 transition-colors bg-slate-50/50 dark:bg-slate-800/30 border-slate-200 dark:border-slate-800">
-                <div className="flex items-center justify-between text-xs mb-2">
-                  <span className="font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-                    <Layers className="h-4 w-4 text-indigo-600" />
-                    Weight Distribution Integrity
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`font-mono font-black ${
-                        isWeightValid ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'
-                      }`}
-                    >
-                      {totalWeight}% / 100%
-                    </span>
-                    {isWeightValid ? (
-                      <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
-                        Valid 100%
+            return (
+              <div
+                key={mc.id || mIdx}
+                className="rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900 overflow-hidden transition-all hover:border-slate-300 dark:hover:border-slate-700"
+              >
+                {/* Main Criterion Card Header */}
+                <div className="border-b border-slate-200 bg-gradient-to-r from-slate-50 via-white to-slate-50/50 p-4 dark:border-slate-800 dark:from-slate-850 dark:via-slate-900 dark:to-slate-850">
+                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                    {/* Index & Title */}
+                    <div className="flex-1 flex items-start sm:items-center gap-3">
+                      <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-600 text-white font-mono text-xs font-bold shrink-0">
+                        #{mIdx + 1}
                       </span>
-                    ) : (
-                      <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold text-rose-800 dark:bg-rose-950 dark:text-rose-300">
-                        Weights Must Sum to 100%
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                <div className="h-2 w-full rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
-                  <div
-                    className={`h-full transition-all duration-300 ${
-                      isWeightValid ? 'bg-emerald-500' : totalWeight > 100 ? 'bg-rose-500' : 'bg-amber-500'
-                    }`}
-                    style={{ width: `${Math.min(100, totalWeight)}%` }}
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Criteria List Builder */}
-            <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-4">
-              <div className="flex items-center justify-between border-b border-slate-100 pb-3 dark:border-slate-800">
-                <div>
-                  <h4 className="text-sm font-bold text-slate-900 dark:text-white">
-                    Criteria Builder ({criteriaList.length} criteria)
-                  </h4>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
-                    Add, edit, reorder, or adjust weight percentages.
-                  </p>
-                </div>
-
-                {isEducationManager && (
-                  <button
-                    onClick={handleAddCriterion}
-                    className="inline-flex items-center gap-1 rounded-lg border border-dashed border-indigo-400 bg-indigo-50/60 px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-300"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                    <span>Add Criterion</span>
-                  </button>
-                )}
-              </div>
-
-              <div className="space-y-3">
-                {criteriaList.map((criterion, index) => (
-                  <div
-                    key={criterion.id || `crit-${index}`}
-                    className="flex flex-col sm:flex-row sm:items-start gap-3 rounded-xl border border-slate-200 p-3.5 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-800/30"
-                  >
-                    {/* Reordering Up/Down controls */}
-                    <div className="flex sm:flex-col items-center gap-1 shrink-0">
-                      <button
-                        onClick={() => handleMoveUp(index)}
-                        disabled={index === 0 || !isEducationManager}
-                        className="rounded p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-700 disabled:opacity-20 dark:hover:bg-slate-700"
-                        title="Move Up"
-                      >
-                        <ArrowUp className="h-3.5 w-3.5" />
-                      </button>
-                      <span className="font-mono text-xs font-bold text-slate-400">{index + 1}</span>
-                      <button
-                        onClick={() => handleMoveDown(index)}
-                        disabled={index === criteriaList.length - 1 || !isEducationManager}
-                        className="rounded p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-700 disabled:opacity-20 dark:hover:bg-slate-700"
-                        title="Move Down"
-                      >
-                        <ArrowDown className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-
-                    {/* Inputs for Name & Description */}
-                    <div className="flex-1 space-y-2">
-                      <input
-                        type="text"
-                        value={criterion.name}
-                        disabled={!isEducationManager}
-                        onChange={(e) => handleUpdateCriterion(index, 'name', e.target.value)}
-                        placeholder="Criterion Name..."
-                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-                      />
-                      <textarea
-                        rows={2}
-                        value={criterion.description}
-                        disabled={!isEducationManager}
-                        onChange={(e) => handleUpdateCriterion(index, 'description', e.target.value)}
-                        placeholder="Detailed rubrics description..."
-                        className="w-full rounded-lg border border-slate-200 bg-white p-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
-                      />
-                    </div>
-
-                    {/* Weight Input & Actions */}
-                    <div className="flex sm:flex-col items-end gap-2 shrink-0">
-                      <div className="flex items-center gap-1">
-                        <label className="text-[10px] uppercase font-bold text-slate-400">Weight %</label>
+                      <div className="flex-1 space-y-1">
                         <input
-                          type="number"
-                          min="1"
-                          max="100"
-                          value={criterion.weightPercentage}
+                          type="text"
+                          value={mc.name}
+                          onChange={(e) => handleUpdateMainCriterion(mIdx, 'name', e.target.value)}
                           disabled={!isEducationManager}
-                          onChange={(e) =>
-                            handleUpdateCriterion(index, 'weightPercentage', parseFloat(e.target.value) || 0)
-                          }
-                          className="w-16 rounded border border-slate-300 px-2 py-1 text-center text-xs font-mono font-bold text-indigo-600 dark:border-slate-600 dark:bg-slate-700 dark:text-indigo-400"
+                          placeholder="Main Criterion Name (e.g. Technical Competence)"
+                          className="w-full bg-transparent text-sm font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 rounded px-1.5 py-0.5"
+                        />
+                        <input
+                          type="text"
+                          value={mc.description}
+                          onChange={(e) => handleUpdateMainCriterion(mIdx, 'description', e.target.value)}
+                          disabled={!isEducationManager}
+                          placeholder="Brief description of this domain..."
+                          className="w-full bg-transparent text-xs text-slate-500 dark:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500 rounded px-1.5 py-0.5"
                         />
                       </div>
+                    </div>
 
+                    {/* Weight % & Real-Time Calculated Score */}
+                    <div className="flex flex-wrap items-center gap-3">
+                      {/* Weight Input */}
+                      <div className="flex items-center gap-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1">
+                        <span className="text-xs font-bold text-slate-500">Weight:</span>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="1"
+                          value={mc.weightPercentage}
+                          onChange={(e) =>
+                            handleUpdateMainCriterion(mIdx, 'weightPercentage', Number(e.target.value) || 0)
+                          }
+                          disabled={!isEducationManager}
+                          className="w-14 text-right font-mono text-sm font-bold text-slate-900 dark:text-white bg-transparent focus:outline-none"
+                        />
+                        <span className="text-xs font-bold text-slate-400">%</span>
+                      </div>
+
+                      {/* Calculated Score Formula Badge */}
+                      <div className="flex items-center gap-1.5 rounded-lg bg-indigo-50 border border-indigo-200 px-3 py-1 dark:bg-indigo-950/60 dark:border-indigo-800">
+                        <Calculator className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" />
+                        <span className="text-xs text-indigo-700 dark:text-indigo-300">Score:</span>
+                        <span className="font-mono text-sm font-black text-indigo-600 dark:text-indigo-400">
+                          {mainCalculatedScore}
+                        </span>
+                        <span className="text-[10px] text-indigo-500 dark:text-indigo-400">
+                          ({mc.weightPercentage}% × {templateTotalScore})
+                        </span>
+                      </div>
+
+                      {/* Sub-Criteria Status Indicator */}
+                      <div
+                        className={`px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1 border ${
+                          isSubValid
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800'
+                            : 'bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/60 dark:text-rose-300 dark:border-rose-800'
+                        }`}
+                      >
+                        {isSubValid ? (
+                          <>
+                            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                            <span>✓ Sub Valid (100%)</span>
+                          </>
+                        ) : (
+                          <>
+                            <AlertTriangle className="h-3.5 w-3.5 text-rose-600" />
+                            <span>
+                              ✗ Sub: {subSum}% ({remainingSubWeight > 0 ? `${remainingSubWeight}% left` : `${Math.abs(remainingSubWeight)}% over`})
+                            </span>
+                          </>
+                        )}
+                      </div>
+
+                      {/* Card Reordering & Delete */}
                       {isEducationManager && (
-                        <button
-                          onClick={() => handleDeleteCriterion(index)}
-                          className="rounded p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-950/40"
-                          title="Delete Criterion"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
+                        <div className="flex items-center gap-1 pl-2 border-l border-slate-200 dark:border-slate-800">
+                          <button
+                            onClick={() => handleMoveMainUp(mIdx)}
+                            disabled={mIdx === 0}
+                            className="p-1 rounded hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-30 text-slate-500"
+                            title="Move Up"
+                          >
+                            <ArrowUp className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleMoveMainDown(mIdx)}
+                            disabled={mIdx === mainCriteriaList.length - 1}
+                            className="p-1 rounded hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-30 text-slate-500"
+                            title="Move Down"
+                          >
+                            <ArrowDown className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteMainCriterion(mIdx)}
+                            className="p-1 rounded hover:bg-rose-100 text-rose-500 dark:hover:bg-rose-950/50"
+                            title="Delete Main Criterion"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
                       )}
                     </div>
                   </div>
-                ))}
-              </div>
-
-              {/* Version Bump Action Bar */}
-              {isEducationManager && (
-                <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
-                  <span className="text-xs text-slate-500 dark:text-slate-400">
-                    Saving modifications will publish a new immutable version in the version control registry.
-                  </span>
-
-                  <button
-                    onClick={() => setShowVersionModal(true)}
-                    disabled={!isWeightValid}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50 transition"
-                  >
-                    <Save className="h-4 w-4" />
-                    <span>Publish Version ({versionNumber})</span>
-                  </button>
                 </div>
-              )}
-            </div>
-          </div>
+
+                {/* Sub-Criteria Section Inside Card */}
+                <div className="p-5 bg-slate-50/40 dark:bg-slate-900/60 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h5 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                        <ChevronRight className="h-3.5 w-3.5 text-indigo-600" />
+                        Sub Criteria for {mc.name || `Criterion #${mIdx + 1}`}
+                      </h5>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        Weights below are calculated ONLY from this parent's score ({mainCalculatedScore} Points), NOT from total observation score.
+                      </p>
+                    </div>
+
+                    {isEducationManager && (
+                      <button
+                        onClick={() => handleAddSubCriterion(mIdx)}
+                        className="inline-flex items-center gap-1 rounded-lg border border-indigo-200 bg-white px-2.5 py-1 text-xs font-bold text-indigo-700 hover:bg-indigo-50 dark:border-indigo-800 dark:bg-slate-800 dark:text-indigo-300 transition shadow-sm"
+                      >
+                        <Plus className="h-3 w-3" />
+                        <span>Add Sub Criterion</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Sub Criteria Table */}
+                  <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-850">
+                    <table className="w-full text-left text-xs">
+                      <thead>
+                        <tr className="border-b border-slate-200 bg-slate-50 font-bold text-slate-600 dark:border-slate-800 dark:bg-slate-800/60 dark:text-slate-300">
+                          <th className="py-2.5 px-3 w-8">#</th>
+                          <th className="py-2.5 px-3 w-1/3">Sub Criterion Name</th>
+                          <th className="py-2.5 px-3">Description & Behavioral Checkpoints</th>
+                          <th className="py-2.5 px-3 text-right w-28">Weight (%)</th>
+                          <th className="py-2.5 px-3 text-right w-36">Calculated Score</th>
+                          {isEducationManager && <th className="py-2.5 px-3 w-12 text-center">Action</th>}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                        {(mc.subCriteria || []).length === 0 ? (
+                          <tr>
+                            <td colSpan={6} className="py-6 text-center text-slate-400">
+                              No Sub Criteria yet. Click "+ Add Sub Criterion" to add items.
+                            </td>
+                          </tr>
+                        ) : (
+                          mc.subCriteria.map((sc, sIdx) => {
+                            // Sub Criterion Calculated Score = (Weight % / 100) * Main Criterion Score
+                            const subCalculatedScore = Number(
+                              ((sc.weightPercentage / 100) * mainCalculatedScore).toFixed(2)
+                            );
+
+                            return (
+                              <tr
+                                key={sc.id || sIdx}
+                                className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition"
+                              >
+                                <td className="py-2.5 px-3 font-mono text-slate-400 font-semibold">
+                                  {sIdx + 1}
+                                </td>
+                                <td className="py-2.5 px-3">
+                                  <input
+                                    type="text"
+                                    value={sc.name}
+                                    onChange={(e) =>
+                                      handleUpdateSubCriterion(mIdx, sIdx, 'name', e.target.value)
+                                    }
+                                    disabled={!isEducationManager}
+                                    placeholder="e.g. Teaching Skills"
+                                    className="w-full bg-transparent font-semibold text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 rounded px-1 py-0.5"
+                                  />
+                                </td>
+                                <td className="py-2.5 px-3">
+                                  <input
+                                    type="text"
+                                    value={sc.description}
+                                    onChange={(e) =>
+                                      handleUpdateSubCriterion(mIdx, sIdx, 'description', e.target.value)
+                                    }
+                                    disabled={!isEducationManager}
+                                    placeholder="Observation guidelines and milestones..."
+                                    className="w-full bg-transparent text-slate-500 dark:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500 rounded px-1 py-0.5"
+                                  />
+                                </td>
+                                <td className="py-2.5 px-3 text-right">
+                                  <div className="inline-flex items-center gap-1 justify-end">
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      max="100"
+                                      step="1"
+                                      value={sc.weightPercentage}
+                                      onChange={(e) =>
+                                        handleUpdateSubCriterion(
+                                          mIdx,
+                                          sIdx,
+                                          'weightPercentage',
+                                          Number(e.target.value) || 0
+                                        )
+                                      }
+                                      disabled={!isEducationManager}
+                                      className="w-14 text-right font-mono font-bold text-slate-800 dark:text-slate-200 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-1.5 py-0.5 focus:outline-none"
+                                    />
+                                    <span className="text-slate-400 font-bold">%</span>
+                                  </div>
+                                </td>
+                                <td className="py-2.5 px-3 text-right">
+                                  <div className="font-mono font-black text-indigo-600 dark:text-indigo-400 text-xs">
+                                    {subCalculatedScore} Points
+                                  </div>
+                                  <div className="text-[10px] text-slate-400">
+                                    {sc.weightPercentage}% of {mainCalculatedScore}
+                                  </div>
+                                </td>
+                                {isEducationManager && (
+                                  <td className="py-2.5 px-3 text-center">
+                                    <button
+                                      onClick={() => handleDeleteSubCriterion(mIdx, sIdx)}
+                                      className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40"
+                                      title="Delete Sub Criterion"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </button>
+                                  </td>
+                                )}
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            );
+          })
         )}
       </div>
 
-      {/* Version Bump Modal */}
-      {showVersionModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm animate-in fade-in">
-          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-900">
-            <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-              <GitBranch className="h-5 w-5 text-indigo-600" />
-              Publish New Rubric Version
-            </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-              Historical evaluations will preserve older versions. Future evaluations will utilize this new release.
-            </p>
-
-            <div className="mt-4 space-y-3">
-              <div>
-                <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
-                  Version Number
-                </label>
-                <input
-                  type="text"
-                  value={versionNumber}
-                  onChange={(e) => setVersionNumber(e.target.value)}
-                  placeholder="e.g. v1.2"
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono font-bold text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
-                  Change Log Narrative <span className="text-rose-500">*</span>
-                </label>
-                <textarea
-                  rows={3}
-                  value={changeLog}
-                  onChange={(e) => setChangeLog(e.target.value)}
-                  placeholder="Describe criteria updates, rebalanced weights, or pedagogical adjustments..."
-                  className="w-full rounded-lg border border-slate-200 bg-white p-2 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-                  required
-                />
-              </div>
-            </div>
-
-            <div className="mt-6 flex items-center justify-end gap-2">
-              <button
-                onClick={() => setShowVersionModal(false)}
-                className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSaveVersion}
-                className="rounded-lg bg-indigo-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-indigo-700"
-              >
-                Confirm & Publish
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Version History Drawer / Modal */}
-      {showVersionHistoryModal && selectedTemplate && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm animate-in fade-in">
-          <div className="w-full max-w-xl rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-900">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3 dark:border-slate-800">
-              <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <History className="h-5 w-5 text-indigo-600" />
-                Template Version Registry
-              </h3>
-              <button
-                onClick={() => setShowVersionHistoryModal(false)}
-                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            <div className="mt-4 max-h-80 overflow-y-auto space-y-3">
-              {(selectedTemplate.versions || []).map((ver) => (
-                <div
-                  key={ver.id}
-                  className="rounded-xl border border-slate-200 p-3 text-xs dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400 text-sm">
-                      {ver.versionNumber}
-                    </span>
-                    <span className="text-[10px] text-slate-400">
-                      {new Date(ver.createdAt).toLocaleDateString()} by {ver.createdBy?.name || 'Administrator'}
-                    </span>
-                  </div>
-                  <p className="mt-1 text-slate-600 dark:text-slate-300 italic">
-                    "{ver.changeLog}"
-                  </p>
-                  <div className="mt-2 text-[10px] text-slate-400">
-                    {ver.criteria?.length || 0} criteria assigned to this immutable release
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="mt-4 flex justify-end">
-              <button
-                onClick={() => setShowVersionHistoryModal(false)}
-                className="rounded-lg bg-slate-800 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-900 dark:bg-slate-700"
-              >
-                Close History
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Create New Template Modal */}
+      {/* Mandatory Step Modal: Create Observation Template with Total Observation Score First */}
       {showCreateTemplateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm animate-in fade-in">
-          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-900">
-            <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-              <Plus className="h-5 w-5 text-indigo-600" />
-              Create Evaluation Template
-            </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-              Initialize a new rubric category for technical or non-technical assessments.
-            </p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-900 space-y-5">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3 dark:border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-white shadow-sm">
+                  <Calculator className="h-4 w-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                    Create Observation Template
+                  </h3>
+                  <p className="text-xs text-slate-500">Configure master total score and criteria hierarchy</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowCreateTemplateModal(false)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
 
-            <form onSubmit={handleCreateTemplate} className="mt-4 space-y-3">
-              <div>
-                <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
-                  Template Name <span className="text-rose-500">*</span>
+            <form onSubmit={handleCreateTemplate} className="space-y-4">
+              {/* PRIMARY PROMPT: Total Observation Score */}
+              <div className="rounded-xl border-2 border-indigo-200 bg-indigo-50/70 p-4 dark:border-indigo-900 dark:bg-indigo-950/40 space-y-2.5">
+                <label className="text-xs font-black uppercase tracking-wider text-indigo-900 dark:text-indigo-200 flex items-center gap-1.5">
+                  <Sparkles className="h-4 w-4 text-indigo-600" />
+                  What is the Total Observation Score?
                 </label>
-                <input
-                  type="text"
-                  value={newTemplateName}
-                  onChange={(e) => setNewTemplateName(e.target.value)}
-                  placeholder="e.g. AI & Machine Learning Evaluation Template"
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-                  required
-                />
+                <p className="text-xs text-indigo-700/80 dark:text-indigo-300/80">
+                  This becomes the master denominator for the entire template. All Main and Sub criteria will automatically scale from this value.
+                </p>
+
+                {/* Preset quick buttons */}
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {[100, 50, 20, 10].map((score) => (
+                    <button
+                      key={score}
+                      type="button"
+                      onClick={() => setNewTemplateTotalScore(score)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold font-mono transition border ${
+                        newTemplateTotalScore === score
+                          ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                          : 'bg-white text-slate-700 border-slate-200 hover:bg-indigo-100 dark:bg-slate-800 dark:text-slate-200 dark:border-slate-700'
+                      }`}
+                    >
+                      {score} Points
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex items-center gap-2 pt-1">
+                  <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">Custom Value:</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="1000"
+                    required
+                    value={newTemplateTotalScore}
+                    onChange={(e) => setNewTemplateTotalScore(Number(e.target.value) || 100)}
+                    className="w-28 rounded-lg border border-indigo-300 bg-white px-3 py-1 font-mono text-base font-bold text-indigo-600 dark:border-indigo-700 dark:bg-slate-800 dark:text-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              {/* Template Metadata */}
+              <div className="space-y-3">
                 <div>
-                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
-                    Code <span className="text-rose-500">*</span>
-                  </label>
+                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300">Template Name *</label>
                   <input
                     type="text"
-                    value={newTemplateCode}
-                    onChange={(e) => setNewTemplateCode(e.target.value)}
-                    placeholder="e.g. TMPL-AI-EVAL"
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-mono text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
                     required
+                    value={newTemplateName}
+                    onChange={(e) => setNewTemplateName(e.target.value)}
+                    placeholder="e.g. Full-Stack Engineering Evaluation Rubric"
+                    className="w-full mt-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
 
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 dark:text-slate-300">Template Code *</label>
+                    <input
+                      type="text"
+                      required
+                      value={newTemplateCode}
+                      onChange={(e) => setNewTemplateCode(e.target.value)}
+                      placeholder="e.g. TMPL-FE-2026"
+                      className="w-full mt-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-mono font-bold text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white uppercase focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 dark:text-slate-300">Observation Type</label>
+                    <select
+                      value={newTemplateType}
+                      onChange={(e) => setNewTemplateType(e.target.value as ObservationType)}
+                      className="w-full mt-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                      <option value="TECHNICAL">Technical Audit</option>
+                      <option value="NON_TECHNICAL">Pedagogical / Non-Technical</option>
+                    </select>
+                  </div>
+                </div>
+
                 <div>
-                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
-                    Type <span className="text-rose-500">*</span>
-                  </label>
-                  <select
-                    value={newTemplateType}
-                    onChange={(e) => setNewTemplateType(e.target.value as ObservationType)}
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-                  >
-                    <option value="TECHNICAL">TECHNICAL</option>
-                    <option value="NON_TECHNICAL">NON_TECHNICAL</option>
-                  </select>
+                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300">Description</label>
+                  <textarea
+                    rows={2}
+                    value={newTemplateDesc}
+                    onChange={(e) => setNewTemplateDesc(e.target.value)}
+                    placeholder="Auditing objectives and scope..."
+                    className="w-full mt-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
                 </div>
               </div>
 
-              <div>
-                <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
-                  Description
-                </label>
-                <textarea
-                  rows={2}
-                  value={newTemplateDesc}
-                  onChange={(e) => setNewTemplateDesc(e.target.value)}
-                  placeholder="Purpose of this rubric..."
-                  className="w-full rounded-lg border border-slate-200 bg-white p-2 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-                />
-              </div>
-
-              <div className="mt-5 flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
                 <button
                   type="button"
                   onClick={() => setShowCreateTemplateModal(false)}
-                  className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                  className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="rounded-lg bg-indigo-600 px-4 py-1.5 text-xs font-bold text-white hover:bg-indigo-700"
+                  className="rounded-lg bg-indigo-600 px-4 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-indigo-700"
                 >
-                  Create Template
+                  Create Template with Total: {newTemplateTotalScore} Pts
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Version Bump Modal */}
+      {showVersionModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-900 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3 dark:border-slate-800">
+              <div className="flex items-center gap-2">
+                <GitBranch className="h-4 w-4 text-indigo-600" />
+                <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                  Publish New Template Version
+                </h3>
+              </div>
+              <button onClick={() => setShowVersionModal(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300">Version Number *</label>
+                <input
+                  type="text"
+                  value={versionNumber}
+                  onChange={(e) => setVersionNumber(e.target.value)}
+                  placeholder="e.g. v1.2 or v2.0"
+                  className="w-full mt-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-mono font-bold text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                  Change Log & Release Notes *
+                </label>
+                <textarea
+                  rows={3}
+                  value={changeLog}
+                  onChange={(e) => setChangeLog(e.target.value)}
+                  placeholder="Summarize rubric modifications and pedagogical weight rebalancing..."
+                  className="w-full mt-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-800/50 space-y-1.5 text-xs">
+                <div className="flex justify-between font-medium">
+                  <span className="text-slate-500">Master Total Score:</span>
+                  <span className="font-mono font-bold text-indigo-600">{templateTotalScore} Points</span>
+                </div>
+                <div className="flex justify-between font-medium">
+                  <span className="text-slate-500">Main Criteria:</span>
+                  <span className="font-mono font-bold">{mainCriteriaList.length} Categories (100%)</span>
+                </div>
+                <div className="flex justify-between font-medium">
+                  <span className="text-slate-500">Total Sub Criteria:</span>
+                  <span className="font-mono font-bold">
+                    {mainCriteriaList.reduce((sum, mc) => sum + (mc.subCriteria || []).length, 0)} Items
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setShowVersionModal(false)}
+                className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveVersion}
+                className="rounded-lg bg-indigo-600 px-4 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-indigo-700"
+              >
+                Publish Version
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Version History Modal */}
+      {showVersionHistoryModal && selectedTemplate && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-900 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3 dark:border-slate-800">
+              <div className="flex items-center gap-2">
+                <History className="h-4 w-4 text-indigo-600" />
+                <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                  Audit Version History for {selectedTemplate.name}
+                </h3>
+              </div>
+              <button onClick={() => setShowVersionHistoryModal(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 max-h-[60vh] overflow-y-auto">
+              {(selectedTemplate.versions || []).map((ver) => (
+                <div
+                  key={ver.id}
+                  className={`p-4 rounded-xl border ${
+                    ver.id === selectedTemplate.currentVersionId
+                      ? 'border-indigo-300 bg-indigo-50/40 dark:border-indigo-800 dark:bg-indigo-950/20'
+                      : 'border-slate-200 bg-slate-50/50 dark:border-slate-800 dark:bg-slate-800/30'
+                  } space-y-2`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-xs font-bold px-2 py-0.5 rounded bg-indigo-600 text-white">
+                        {ver.versionNumber}
+                      </span>
+                      {ver.id === selectedTemplate.currentVersionId && (
+                        <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">
+                          Current Active Rubric
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-xs text-slate-400">
+                      {new Date(ver.createdAt).toLocaleDateString()}
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-slate-700 dark:text-slate-300 font-medium">
+                    {ver.changeLog || 'Standard release update'}
+                  </p>
+
+                  <div className="text-[11px] text-slate-500 font-mono">
+                    Total Score: {ver.totalScore || selectedTemplate.totalScore || 100} pts • {ver.mainCriteria?.length || 0} Main Criteria
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}

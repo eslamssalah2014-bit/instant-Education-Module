@@ -13,9 +13,10 @@ export const exportObservationsToExcel = (observations: Observation[], filename 
     'Observer': obs.observer?.name || 'N/A',
     'Observation Date': new Date(obs.observationDate).toLocaleDateString(),
     'Type': obs.type,
-    'Total Score (out of 10)': obs.totalScore,
-    'Weighted Score (%)': obs.weightedScore,
-    'Grade': obs.grade || 'N/A',
+    'Master Total Score': obs.maxScore || 100,
+    'Achieved Total Score': obs.totalScore,
+    'Final Percentage (%)': `${obs.percentageScore}%`,
+    'Classification Tier': obs.tier || obs.grade || 'N/A',
     'Status': obs.status,
     'Strengths': obs.feedback?.strengths || '',
     'Areas for Improvement': obs.feedback?.areasForImprovement || '',
@@ -48,13 +49,14 @@ export const exportObservationsToPDF = (observations: Observation[], title = 'In
     obs.observer?.name || 'N/A',
     new Date(obs.observationDate).toLocaleDateString(),
     obs.type === 'TECHNICAL' ? 'Tech' : 'Non-Tech',
-    `${obs.totalScore} / 10`,
-    obs.grade || 'N/A',
+    `${obs.totalScore} / ${obs.maxScore || 100}`,
+    `${obs.percentageScore}%`,
+    obs.tier || obs.grade || 'N/A',
   ]);
 
   autoTable(doc, {
     startY: 70,
-    head: [['Code', 'Instructor', 'Track', 'Group', 'Observer', 'Date', 'Type', 'Score', 'Grade']],
+    head: [['Code', 'Instructor', 'Track', 'Group', 'Observer', 'Date', 'Type', 'Points', 'Percentage', 'Tier']],
     body: tableData,
     theme: 'grid',
     headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 9 },
@@ -116,39 +118,61 @@ export const exportSingleObservationPDF = (obs: Observation) => {
   doc.text(obs.group?.name || 'N/A', leftX + 70, y);
 
   doc.setFont('helvetica', 'bold');
-  doc.text('Overall Score:', rightX, y);
+  doc.text('Score & Tier:', rightX, y);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(79, 70, 229);
-  doc.text(`${obs.totalScore}/10 (${obs.weightedScore}%) - ${obs.grade}`, rightX + 110, y);
+  doc.text(`${obs.totalScore} / ${obs.maxScore || 100} pts (${obs.percentageScore}%) - Tier ${obs.tier || obs.grade}`, rightX + 80, y);
   doc.setTextColor(30, 41, 59);
 
   // Criteria Table
   y += 35;
   doc.setFontSize(13);
   doc.setFont('helvetica', 'bold');
-  doc.text('Rubric Criteria Evaluation', 40, y);
+  doc.text('Rubric Criteria Evaluation (Hierarchical)', 40, y);
 
-  const criteriaRows = (obs.scores || []).map((s) => [
-    s.criterionName,
-    `${s.weight}%`,
-    `${s.score} / 10`,
-    `${s.weightedScore} pts`,
-    s.feedback || 'Satisfactory execution',
-  ]);
+  let criteriaRows: any[] = [];
+  if (obs.mainResults && obs.mainResults.length > 0) {
+    obs.mainResults.forEach((mr) => {
+      criteriaRows.push([
+        `[MAIN] ${mr.mainCriterionName}`,
+        `${mr.weightPercentage}%`,
+        `${mr.score} / ${mr.maxScore} pts`,
+        `${mr.percentage}%`,
+        'Domain Aggregate Score',
+      ]);
+      (mr.subResults || []).forEach((sr) => {
+        criteriaRows.push([
+          `   • ${sr.subCriterionName}`,
+          `${sr.weightPercentage}% of parent`,
+          `${sr.score} / ${sr.maxScore} pts`,
+          `${sr.maxScore > 0 ? ((sr.score / sr.maxScore) * 100).toFixed(0) : 0}%`,
+          sr.feedback || 'Satisfactory execution',
+        ]);
+      });
+    });
+  } else {
+    criteriaRows = (obs.scores || []).map((s) => [
+      s.criterionName,
+      `${s.weight}%`,
+      `${s.score} pts`,
+      `${s.weightedScore} pts`,
+      s.feedback || 'Satisfactory execution',
+    ]);
+  }
 
   autoTable(doc, {
     startY: y + 10,
-    head: [['Criterion Name', 'Weight', 'Score', 'Weighted Score', 'Feedback']],
+    head: [['Criteria Item', 'Weight', 'Score / Max', 'Percentage', 'Feedback']],
     body: criteriaRows,
     theme: 'grid',
     headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 9 },
     bodyStyles: { fontSize: 8.5 },
     columnStyles: {
-      0: { cellWidth: 120 },
-      1: { cellWidth: 50 },
-      2: { cellWidth: 50 },
-      3: { cellWidth: 70 },
-      4: { cellWidth: 220 },
+      0: { cellWidth: 150 },
+      1: { cellWidth: 70 },
+      2: { cellWidth: 70 },
+      3: { cellWidth: 60 },
+      4: { cellWidth: 160 },
     },
   });
 

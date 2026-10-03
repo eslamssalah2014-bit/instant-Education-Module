@@ -6,13 +6,14 @@ export type ObservationStatus = 'DRAFT' | 'SUBMITTED' | 'REVIEWED' | 'ARCHIVED';
 
 export type InstructorStatus = 'ACTIVE' | 'ON_LEAVE' | 'PROBATION' | 'INACTIVE';
 
-export type InstructorTier = 'A+' | 'A' | 'B+' | 'B';
+export type InstructorTier = 'A+' | 'A' | 'B+' | 'B' | 'Needs Improvement';
 
 export function getTierFromScore(score: number): InstructorTier {
-  if (score >= 90) return 'A+';
-  if (score >= 80) return 'A';
-  if (score >= 70) return 'B+';
-  return 'B';
+  if (score >= 95) return 'A+';
+  if (score >= 90) return 'A';
+  if (score >= 85) return 'B+';
+  if (score >= 80) return 'B';
+  return 'Needs Improvement';
 }
 
 export function getTierBadgeClass(tier: InstructorTier): string {
@@ -24,6 +25,8 @@ export function getTierBadgeClass(tier: InstructorTier): string {
     case 'B+':
       return 'bg-amber-100 text-amber-800 dark:bg-amber-950/70 dark:text-amber-300 border-amber-300 dark:border-amber-800';
     case 'B':
+      return 'bg-orange-100 text-orange-800 dark:bg-orange-950/70 dark:text-orange-300 border-orange-300 dark:border-orange-800';
+    case 'Needs Improvement':
       return 'bg-rose-100 text-rose-800 dark:bg-rose-950/70 dark:text-rose-300 border-rose-300 dark:border-rose-800';
   }
 }
@@ -85,6 +88,54 @@ export interface Group {
   updatedAt: string;
 }
 
+export interface SubCriterion {
+  id: string;
+  mainCriterionId: string;
+  name: string;
+  description: string;
+  weightPercentage: number; // percentage of parent main criterion weight (sum inside main criterion must = 100%)
+  calculatedScore: number;  // (weightPercentage / 100) * mainCriterion.calculatedScore
+  orderIndex: number;
+  isActive: boolean;
+}
+
+export interface MainCriterion {
+  id: string;
+  templateVersionId: string;
+  name: string;
+  description: string;
+  weightPercentage: number; // percentage of total observation score (sum of all main criteria must = 100%)
+  calculatedScore: number;  // (weightPercentage / 100) * template.totalScore
+  orderIndex: number;
+  isActive: boolean;
+  subCriteria: SubCriterion[];
+}
+
+export interface SubCriterionResult {
+  id: string;
+  observationId: string;
+  mainCriterionId: string;
+  subCriterionId: string;
+  subCriterionName: string;
+  weightPercentage: number;
+  maxScore: number;
+  score: number;
+  feedback?: string;
+}
+
+export interface MainCriterionResult {
+  id: string;
+  observationId: string;
+  mainCriterionId: string;
+  mainCriterionName: string;
+  weightPercentage: number;
+  maxScore: number;
+  score: number;
+  percentage: number;
+  subResults: SubCriterionResult[];
+}
+
+// Flat criterion maintained for backward compatibility where needed
 export interface ObservationCriterion {
   id: string;
   templateVersionId: string;
@@ -103,10 +154,12 @@ export interface ObservationTemplateVersion {
   templateId: string;
   versionNumber: string;
   changeLog: string;
+  totalScore: number;
   createdById: string;
   createdBy?: User;
   isActive: boolean;
-  criteria: ObservationCriterion[];
+  mainCriteria: MainCriterion[];
+  criteria?: ObservationCriterion[];
   createdAt: string;
 }
 
@@ -116,6 +169,7 @@ export interface ObservationTemplate {
   name: string;
   type: ObservationType;
   description: string;
+  totalScore: number; // Master Total Score (e.g. 100, 50, 20, 10)
   isActive: boolean;
   isArchived: boolean;
   currentVersionId?: string;
@@ -173,12 +227,15 @@ export interface Observation {
   track?: Track;
   observationDate: string;
   status: ObservationStatus;
-  totalScore: number;
-  weightedScore: number;
-  percentageScore: number;
-  grade?: string;
+  maxScore: number;         // Master Total Score (e.g. 100, 50, 20, 10)
+  totalScore: number;       // Sum of all achieved points across main criteria
+  weightedScore?: number;
+  percentageScore: number;  // (totalScore / maxScore) * 100
+  grade?: string;           // 'A+' | 'A' | 'B+' | 'B' | 'Needs Improvement'
   tier?: InstructorTier;
-  scores?: ObservationScore[];
+  mainResults?: MainCriterionResult[]; // Stored separately for reporting
+  subResults?: SubCriterionResult[];   // Stored separately for reporting
+  scores?: ObservationScore[];         // legacy compatibility
   feedback?: ObservationFeedback;
   actionPlan?: ActionPlanItem[];
   createdAt: string;

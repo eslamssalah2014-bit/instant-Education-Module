@@ -70,6 +70,53 @@ export interface Group {
   updatedAt: string;
 }
 
+export interface SubCriterion {
+  id: string;
+  mainCriterionId: string;
+  name: string;
+  description: string;
+  weightPercentage: number;
+  calculatedScore: number;
+  orderIndex: number;
+  isActive: boolean;
+}
+
+export interface MainCriterion {
+  id: string;
+  templateVersionId: string;
+  name: string;
+  description: string;
+  weightPercentage: number;
+  calculatedScore: number;
+  orderIndex: number;
+  isActive: boolean;
+  subCriteria: SubCriterion[];
+}
+
+export interface SubCriterionResult {
+  id: string;
+  observationId: string;
+  mainCriterionId: string;
+  subCriterionId: string;
+  subCriterionName: string;
+  weightPercentage: number;
+  maxScore: number;
+  score: number;
+  feedback?: string;
+}
+
+export interface MainCriterionResult {
+  id: string;
+  observationId: string;
+  mainCriterionId: string;
+  mainCriterionName: string;
+  weightPercentage: number;
+  maxScore: number;
+  score: number;
+  percentage: number;
+  subResults: SubCriterionResult[];
+}
+
 export interface ObservationCriterion {
   id: string;
   templateVersionId: string;
@@ -87,10 +134,12 @@ export interface ObservationTemplateVersion {
   templateId: string;
   versionNumber: string; // e.g. "v1.0"
   changeLog: string;
+  totalScore: number;
   createdById: string;
   createdBy?: User;
   isActive: boolean;
-  criteria: ObservationCriterion[];
+  mainCriteria: MainCriterion[];
+  criteria?: ObservationCriterion[];
   createdAt: string;
 }
 
@@ -100,6 +149,7 @@ export interface ObservationTemplate {
   name: string;
   type: ObservationType;
   description: string;
+  totalScore: number;
   isActive: boolean;
   isArchived: boolean;
   currentVersionId?: string;
@@ -148,10 +198,13 @@ export interface Observation {
   track?: Track;
   observationDate: string;
   status: ObservationStatus;
-  totalScore: number;       // Average of criteria scores (1-10)
-  weightedScore: number;    // Weighted score (out of 100)
-  percentageScore: number;  // Percentage score (0 - 100%)
-  grade?: string;           // "Outstanding" (90-100), "Proficient" (80-89), "Developing" (70-79), "Needs Attention" (<70)
+  maxScore: number;
+  totalScore: number;
+  weightedScore?: number;
+  percentageScore: number;
+  grade?: string;
+  mainResults?: MainCriterionResult[];
+  subResults?: SubCriterionResult[];
   scores?: ObservationScore[];
   feedback?: ObservationFeedback;
   createdAt: string;
