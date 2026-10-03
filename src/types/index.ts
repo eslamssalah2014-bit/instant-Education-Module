@@ -245,11 +245,31 @@ export interface ObservationTemplate {
   totalScore: number; // Master Total Score (e.g. 100, 50, 20, 10)
   isActive: boolean;
   isArchived: boolean;
+  archivedAt?: string;
+  archivedBy?: string;
   currentVersionId?: string;
   currentVersion?: ObservationTemplateVersion;
   versions?: ObservationTemplateVersion[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface TemplateUsageInfo {
+  templateId: string;
+  templateName: string;
+  templateCode: string;
+  isUsed: boolean;
+  observationCount: number;
+  historicalCount: number;
+  versionCount: number;
+  reportCount: number;
+  canPermanentlyDelete: boolean;
+  linkedObservations: {
+    id: string;
+    observationCode: string;
+    date: string;
+    instructorName?: string;
+  }[];
 }
 
 export interface ObservationScore {

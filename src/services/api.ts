@@ -32,6 +32,7 @@ import {
   GroupImportRow,
   Session,
   SessionStatus,
+  TemplateUsageInfo,
 } from '../types';
 import { supabase } from './supabase';
 import {
@@ -1602,7 +1603,11 @@ class LocalDatabase {
 
   public getTemplatePreview(type: ObservationType): ObservationTemplate & { currentVersion: ObservationTemplateVersion } {
     const tmpls = this.getTemplates();
-    const tmpl = tmpls.find((t) => t.type === type) || tmpls[0];
+    const tmpl =
+      tmpls.find((t) => t.type === type && !t.isArchived && t.isActive) ||
+      tmpls.find((t) => t.type === type && !t.isArchived) ||
+      tmpls.find((t) => !t.isArchived) ||
+      tmpls[0];
     if (!tmpl) {
       throw new Error(`No observation template available for type ${type}`);
     }
@@ -1931,32 +1936,175 @@ class LocalDatabase {
   public archiveTemplate(templateId: string, isArchived: boolean): boolean {
     const tmpl = this.templates.find((t) => t.id === templateId);
     if (!tmpl) throw new Error(`Template ${templateId} not found.`);
+    const user = this.getCurrentUser();
     tmpl.isArchived = isArchived;
+    if (isArchived) {
+      tmpl.isActive = false;
+      tmpl.archivedAt = new Date().toISOString();
+      tmpl.archivedBy = this.currentUserId;
+    } else {
+      tmpl.isActive = true;
+      tmpl.archivedAt = undefined;
+      tmpl.archivedBy = undefined;
+    }
     tmpl.updatedAt = new Date().toISOString();
     this.save('erp_templates', this.templates);
-    this.logAction('TEMPLATE_ARCHIVE_CHANGED', 'ObservationTemplate', templateId, { isArchived });
+    this.logAction(
+      isArchived ? 'TEMPLATE_ARCHIVED' : 'TEMPLATE_RESTORED',
+      'ObservationTemplate',
+      templateId,
+      {
+        templateName: tmpl.name,
+        templateCode: tmpl.code,
+        user: user?.name,
+        userId: user?.id,
+        date: new Date().toISOString(),
+        action: isArchived ? 'Archived' : 'Restored',
+        reason: isArchived ? 'Template moved to archive' : 'Template restored from archive',
+      }
+    );
     return true;
   }
 
-  public deleteTemplate(id: string): boolean {
+  public restoreTemplate(templateId: string): ObservationTemplate {
+    const tmpl = this.templates.find((t) => t.id === templateId);
+    if (!tmpl) throw new Error(`Template ${templateId} not found.`);
+    const user = this.getCurrentUser();
+
+    tmpl.isArchived = false;
+    tmpl.isActive = true;
+    tmpl.archivedAt = undefined;
+    tmpl.archivedBy = undefined;
+    tmpl.updatedAt = new Date().toISOString();
+
+    this.save('erp_templates', this.templates);
+    this.logAction('TEMPLATE_RESTORED', 'ObservationTemplate', templateId, {
+      templateName: tmpl.name,
+      templateCode: tmpl.code,
+      user: user?.name,
+      userId: user?.id,
+      date: new Date().toISOString(),
+      action: 'Restored',
+      reason: 'Template restored from archive back to active roster.',
+    });
+
+    return tmpl;
+  }
+
+  public getTemplateUsage(templateId: string): TemplateUsageInfo {
+    const tmpl = this.templates.find((t) => t.id === templateId);
+    if (!tmpl) throw new Error(`Template ${templateId} not found.`);
+
+    const versions = this.templateVersions.filter((v) => v.templateId === templateId);
+    const versionIds = versions.map((v) => v.id);
+
+    // Check observations linked to any version of this template or templateId
+    const linkedObs = this.observations.filter(
+      (o) => versionIds.includes(o.templateVersionId) || (o as any).templateId === templateId
+    );
+
+    const observationCount = linkedObs.length;
+    const historicalCount = linkedObs.filter(
+      (o) => o.status === 'SUBMITTED' || o.status === 'REVIEWED'
+    ).length;
+    const versionCount = versions.length;
+    const reportCount = observationCount;
+
+    // If template has observations, it has been used
+    const isUsed = observationCount > 0;
+    const canPermanentlyDelete = !isUsed;
+
+    return {
+      templateId,
+      templateName: tmpl.name,
+      templateCode: tmpl.code,
+      isUsed,
+      observationCount,
+      historicalCount,
+      versionCount,
+      reportCount,
+      canPermanentlyDelete,
+      linkedObservations: linkedObs.slice(0, 10).map((o) => {
+        const inst = this.instructors.find((i) => i.id === o.instructorId);
+        return {
+          id: o.id,
+          observationCode: o.observationCode,
+          date: o.observationDate,
+          instructorName: inst?.user?.name || inst?.employeeId || 'Unknown Instructor',
+        };
+      }),
+    };
+  }
+
+  public deleteTemplate(id: string): { action: 'DELETED' | 'ARCHIVED'; message: string; template: ObservationTemplate } {
     const idx = this.templates.findIndex((t) => t.id === id);
     if (idx === -1) throw new Error(`Template with ID ${id} not found.`);
     const tmpl = this.templates[idx];
-    const versionIds = this.templateVersions.filter((v) => v.templateId === id).map((v) => v.id);
-    const mainCritIds = this.mainCriteria.filter((mc) => versionIds.includes(mc.templateVersionId)).map((mc) => mc.id);
+    const user = this.getCurrentUser();
+    const usage = this.getTemplateUsage(id);
 
-    this.templates.splice(idx, 1);
-    this.templateVersions = this.templateVersions.filter((v) => v.templateId !== id);
-    this.mainCriteria = this.mainCriteria.filter((mc) => !versionIds.includes(mc.templateVersionId));
-    this.subCriteria = this.subCriteria.filter((sc) => !mainCritIds.includes(sc.mainCriterionId));
+    if (usage.isUsed) {
+      // 5. If the template has been used before:
+      // - Do NOT physically delete it.
+      // - Convert it to Archived Status.
+      // - Hide it from active templates.
+      // - Keep all historical records intact.
+      tmpl.isArchived = true;
+      tmpl.isActive = false;
+      tmpl.archivedAt = new Date().toISOString();
+      tmpl.archivedBy = this.currentUserId;
+      tmpl.updatedAt = new Date().toISOString();
 
-    this.save('erp_templates', this.templates);
-    this.save('erp_template_versions', this.templateVersions);
-    this.save('erp_main_criteria', this.mainCriteria);
-    this.save('erp_sub_criteria', this.subCriteria);
+      this.save('erp_templates', this.templates);
+      this.logAction('TEMPLATE_ARCHIVED', 'ObservationTemplate', id, {
+        templateName: tmpl.name,
+        templateCode: tmpl.code,
+        user: user?.name,
+        userId: user?.id,
+        date: tmpl.archivedAt,
+        action: 'Archived',
+        reason: `Template is linked to ${usage.observationCount} existing observation(s). Converted to Archived status to preserve historical records.`,
+        observationCount: usage.observationCount,
+        historicalCount: usage.historicalCount,
+      });
 
-    this.logAction('TEMPLATE_DELETED', 'ObservationTemplate', id, { code: tmpl.code });
-    return true;
+      return {
+        action: 'ARCHIVED',
+        message: `Template "${tmpl.name}" is linked to ${usage.observationCount} existing observation(s) and historical reports. It has been safely converted to Archived status to preserve institutional records.`,
+        template: tmpl,
+      };
+    } else {
+      // 6. If the template has never been used:
+      // Allow permanent deletion.
+      const versionIds = this.templateVersions.filter((v) => v.templateId === id).map((v) => v.id);
+      const mainCritIds = this.mainCriteria.filter((mc) => versionIds.includes(mc.templateVersionId)).map((mc) => mc.id);
+
+      this.templates.splice(idx, 1);
+      this.templateVersions = this.templateVersions.filter((v) => v.templateId !== id);
+      this.mainCriteria = this.mainCriteria.filter((mc) => !versionIds.includes(mc.templateVersionId));
+      this.subCriteria = this.subCriteria.filter((sc) => !mainCritIds.includes(sc.mainCriterionId));
+
+      this.save('erp_templates', this.templates);
+      this.save('erp_template_versions', this.templateVersions);
+      this.save('erp_main_criteria', this.mainCriteria);
+      this.save('erp_sub_criteria', this.subCriteria);
+
+      this.logAction('TEMPLATE_DELETED', 'ObservationTemplate', id, {
+        templateName: tmpl.name,
+        templateCode: tmpl.code,
+        user: user?.name,
+        userId: user?.id,
+        date: new Date().toISOString(),
+        action: 'Deleted',
+        reason: 'Unused template permanently deleted.',
+      });
+
+      return {
+        action: 'DELETED',
+        message: `Template "${tmpl.name}" had no linked observations and was permanently deleted.`,
+        template: tmpl,
+      };
+    }
   }
 
   // --- Dashboard Analytics ---
@@ -2573,6 +2721,8 @@ export const api = {
   getTemplatePreview: async (type: ObservationType) => db.getTemplatePreview(type),
   createTemplate: async (data: any) => db.createTemplate(data),
   deleteTemplate: async (id: string) => db.deleteTemplate(id),
+  restoreTemplate: async (id: string) => db.restoreTemplate(id),
+  getTemplateUsage: async (id: string) => db.getTemplateUsage(id),
   bumpTemplateVersion: async (templateId: string, data: { versionNumber: string; changeLog: string; totalScore?: number; mainCriteria: any[] }) =>
     db.bumpTemplateVersion(templateId, data),
   cloneTemplate: async (templateId: string) => db.cloneTemplate(templateId),

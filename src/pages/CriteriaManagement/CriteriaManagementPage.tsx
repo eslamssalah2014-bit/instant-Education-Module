@@ -23,7 +23,7 @@ import {
   Percent,
 } from 'lucide-react';
 import { api } from '../../services/api';
-import { ObservationTemplate, ObservationTemplateVersion, ObservationType } from '../../types';
+import { ObservationTemplate, ObservationTemplateVersion, ObservationType, TemplateUsageInfo } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 
 interface EditableSubCriterion {
@@ -61,6 +61,15 @@ export const CriteriaManagementPage: React.FC = () => {
   const [showCreateTemplateModal, setShowCreateTemplateModal] = useState(false);
   const [showVersionHistoryModal, setShowVersionHistoryModal] = useState(false);
 
+  // Template Filter & Safe Deletion Workflow
+  const [templateFilter, setTemplateFilter] = useState<'ACTIVE' | 'ARCHIVED'>('ACTIVE');
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteUsageInfo, setDeleteUsageInfo] = useState<TemplateUsageInfo | null>(null);
+  const [isLoadingUsage, setIsLoadingUsage] = useState(false);
+  const [deleteConfirmationInput, setDeleteConfirmationInput] = useState('');
+  const [hasDoubleConfirmed, setHasDoubleConfirmed] = useState(false);
+  const [isProcessingDelete, setIsProcessingDelete] = useState(false);
+
   // New Template Modal state with mandatory "Total Observation Score" first step
   const [newTemplateTotalScore, setNewTemplateTotalScore] = useState<number>(100);
   const [newTemplateName, setNewTemplateName] = useState('');
@@ -70,13 +79,21 @@ export const CriteriaManagementPage: React.FC = () => {
 
   const [notificationMsg, setNotificationMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
-  const fetchTemplates = async () => {
+  const fetchTemplates = async (preferredId?: string) => {
     try {
       setIsLoading(true);
       const data = await api.getTemplates();
       setTemplates(data);
-      if (data.length > 0 && !selectedTemplateId) {
-        setSelectedTemplateId(data[0].id);
+      if (preferredId) {
+        setSelectedTemplateId(preferredId);
+      } else if (!selectedTemplateId || !data.some((t) => t.id === selectedTemplateId)) {
+        const defaultTmpl =
+          templateFilter === 'ACTIVE'
+            ? data.find((t) => !t.isArchived) || data[0]
+            : data.find((t) => t.isArchived) || data[0];
+        if (defaultTmpl) {
+          setSelectedTemplateId(defaultTmpl.id);
+        }
       }
     } catch (err) {
       console.error('Failed to load templates:', err);
@@ -89,7 +106,11 @@ export const CriteriaManagementPage: React.FC = () => {
     fetchTemplates();
   }, []);
 
-  const selectedTemplate = templates.find((t) => t.id === selectedTemplateId) || templates[0];
+  const activeTemplates = templates.filter((t) => !t.isArchived);
+  const archivedTemplates = templates.filter((t) => t.isArchived);
+  const filteredTemplates = templateFilter === 'ACTIVE' ? activeTemplates : archivedTemplates;
+
+  const selectedTemplate = templates.find((t) => t.id === selectedTemplateId) || filteredTemplates[0] || templates[0];
 
   useEffect(() => {
     if (selectedTemplate) {
@@ -373,6 +394,66 @@ export const CriteriaManagementPage: React.FC = () => {
     }
   };
 
+  const handleOpenDeleteModal = async (template: ObservationTemplate) => {
+    try {
+      setIsLoadingUsage(true);
+      setShowDeleteModal(true);
+      setDeleteConfirmationInput('');
+      setHasDoubleConfirmed(false);
+      const usage = await api.getTemplateUsage(template.id);
+      setDeleteUsageInfo(usage);
+    } catch (err: any) {
+      setNotificationMsg({ text: err.message || 'Failed to inspect template dependencies', type: 'error' });
+      setShowDeleteModal(false);
+    } finally {
+      setIsLoadingUsage(false);
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!selectedTemplate || deleteConfirmationInput.trim() !== 'DELETE' || !hasDoubleConfirmed) {
+      return;
+    }
+
+    try {
+      setIsProcessingDelete(true);
+      const res = await api.deleteTemplate(selectedTemplate.id);
+      setNotificationMsg({
+        text: res.message,
+        type: 'success',
+      });
+      setShowDeleteModal(false);
+      await fetchTemplates();
+      // Select another template in current or opposite tab
+      const remaining =
+        res.action === 'ARCHIVED' && templateFilter === 'ACTIVE'
+          ? templates.filter((t) => !t.isArchived && t.id !== selectedTemplate.id)
+          : templates.filter((t) => t.id !== selectedTemplate.id);
+      if (remaining.length > 0) {
+        setSelectedTemplateId(remaining[0].id);
+      }
+    } catch (err: any) {
+      setNotificationMsg({ text: err.message || 'Failed to delete template', type: 'error' });
+    } finally {
+      setIsProcessingDelete(false);
+    }
+  };
+
+  const handleRestoreTemplate = async (templateId: string) => {
+    try {
+      const restored = await api.restoreTemplate(templateId);
+      setNotificationMsg({
+        text: `Template "${restored.name}" has been restored to active templates.`,
+        type: 'success',
+      });
+      await fetchTemplates(restored.id);
+      setTemplateFilter('ACTIVE');
+      setSelectedTemplateId(restored.id);
+    } catch (err: any) {
+      setNotificationMsg({ text: err.message || 'Failed to restore template', type: 'error' });
+    }
+  };
+
   const handleCreateTemplate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTemplateName.trim() || !newTemplateCode.trim()) return;
@@ -454,41 +535,105 @@ export const CriteriaManagementPage: React.FC = () => {
 
       {/* Template Selector & Master Controls */}
       <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-4">
+        {/* Active vs Archived Filters Tabs */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
+          <div className="inline-flex rounded-lg bg-slate-100 p-1 dark:bg-slate-800/80">
+            <button
+              onClick={() => {
+                setTemplateFilter('ACTIVE');
+                const firstActive = templates.find((t) => !t.isArchived);
+                if (firstActive) setSelectedTemplateId(firstActive.id);
+              }}
+              className={`flex items-center gap-2 rounded-md px-3 py-1.5 text-xs font-bold transition ${
+                templateFilter === 'ACTIVE'
+                  ? 'bg-white text-indigo-600 shadow-sm dark:bg-slate-900 dark:text-indigo-400'
+                  : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'
+              }`}
+            >
+              <FileCheck2 className="h-3.5 w-3.5" />
+              <span>Active Templates</span>
+              <span className="rounded-full bg-indigo-100 px-1.5 py-0.2 text-[10px] font-bold text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300">
+                {activeTemplates.length}
+              </span>
+            </button>
+
+            <button
+              onClick={() => {
+                setTemplateFilter('ARCHIVED');
+                const firstArchived = templates.find((t) => t.isArchived);
+                if (firstArchived) setSelectedTemplateId(firstArchived.id);
+              }}
+              className={`flex items-center gap-2 rounded-md px-3 py-1.5 text-xs font-bold transition ${
+                templateFilter === 'ARCHIVED'
+                  ? 'bg-white text-amber-600 shadow-sm dark:bg-slate-900 dark:text-amber-400'
+                  : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'
+              }`}
+            >
+              <Archive className="h-3.5 w-3.5" />
+              <span>Archived Templates</span>
+              <span className="rounded-full bg-slate-200 px-1.5 py-0.2 text-[10px] font-bold text-slate-700 dark:bg-slate-700 dark:text-slate-300">
+                {archivedTemplates.length}
+              </span>
+            </button>
+          </div>
+
+          {selectedTemplate?.isArchived && (
+            <div className="flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800 dark:bg-amber-950/40 dark:text-amber-300 border border-amber-200 dark:border-amber-900/50">
+              <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" />
+              <span>
+                Archived rubric: Preserved for historical observations and reports. Hidden from active evaluation creation.
+              </span>
+            </div>
+          )}
+        </div>
+
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-800">
           <div className="flex flex-wrap items-center gap-3">
             <label className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-              Active Template:
+              {templateFilter === 'ACTIVE' ? 'Active Template:' : 'Archived Template:'}
             </label>
             <select
               value={selectedTemplateId}
               onChange={(e) => setSelectedTemplateId(e.target.value)}
               className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             >
-              {templates.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name} ({t.code}) — Total: {t.totalScore || 100} pts
-                </option>
-              ))}
+              {filteredTemplates.length === 0 ? (
+                <option value="">No {templateFilter.toLowerCase()} templates available</option>
+              ) : (
+                filteredTemplates.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name} ({t.code}) — Total: {t.totalScore || 100} pts {t.isArchived ? '[ARCHIVED]' : ''}
+                  </option>
+                ))
+              )}
             </select>
 
-            <span className="text-xs font-mono px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-semibold">
-              {selectedTemplate?.currentVersion?.versionNumber || 'v1.0'}
-            </span>
-
             {selectedTemplate && (
-              <span
-                className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${
-                  selectedTemplate.isActive
-                    ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
-                    : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
-                }`}
-              >
-                {selectedTemplate.isActive ? 'Active Rubric' : 'Inactive'}
-              </span>
+              <>
+                <span className="text-xs font-mono px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-semibold">
+                  {selectedTemplate?.currentVersion?.versionNumber || 'v1.0'}
+                </span>
+
+                <span
+                  className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${
+                    selectedTemplate.isArchived
+                      ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300'
+                      : selectedTemplate.isActive
+                      ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                      : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+                  }`}
+                >
+                  {selectedTemplate.isArchived
+                    ? 'Archived (Preserved)'
+                    : selectedTemplate.isActive
+                    ? 'Active Rubric'
+                    : 'Inactive'}
+                </span>
+              </>
             )}
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() => setShowVersionHistoryModal(true)}
               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
@@ -497,33 +642,46 @@ export const CriteriaManagementPage: React.FC = () => {
               <span>Version History</span>
             </button>
 
+            {/* Manager-only controls: Clone, Deactivate/Activate, Restore, Delete */}
             {isEducationManager && selectedTemplate && (
               <>
                 <button
                   onClick={() => handleCloneTemplate(selectedTemplate.id)}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 transition"
                   title="Clone Template"
                 >
                   <Copy className="h-3.5 w-3.5 text-slate-500" />
                   <span>Clone</span>
                 </button>
 
-                <button
-                  onClick={() => handleToggleStatus(selectedTemplate)}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
-                  title="Toggle Status"
-                >
-                  <Power className="h-3.5 w-3.5 text-slate-500" />
-                  <span>{selectedTemplate.isActive ? 'Deactivate' : 'Activate'}</span>
-                </button>
+                {!selectedTemplate.isArchived ? (
+                  <button
+                    onClick={() => handleToggleStatus(selectedTemplate)}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 transition"
+                    title="Toggle Status"
+                  >
+                    <Power className="h-3.5 w-3.5 text-slate-500" />
+                    <span>{selectedTemplate.isActive ? 'Deactivate' : 'Activate'}</span>
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => handleRestoreTemplate(selectedTemplate.id)}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-1.5 text-xs font-bold text-emerald-700 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300 transition"
+                    title="Restore Template to Active Roster"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5 text-emerald-600" />
+                    <span>Restore Template</span>
+                  </button>
+                )}
 
+                {/* Permanent Delete Button next to Clone, Deactivate, Restore */}
                 <button
-                  onClick={() => handleArchive(selectedTemplate)}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
-                  title="Archive / Restore"
+                  onClick={() => handleOpenDeleteModal(selectedTemplate)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-bold text-rose-700 hover:bg-rose-100 dark:border-rose-900/60 dark:bg-rose-950/40 dark:text-rose-300 transition"
+                  title="Delete Template"
                 >
-                  <Archive className="h-3.5 w-3.5 text-slate-500" />
-                  <span>{selectedTemplate.isArchived ? 'Restore' : 'Archive'}</span>
+                  <Trash2 className="h-3.5 w-3.5 text-rose-600 dark:text-rose-400" />
+                  <span>Delete Template</span>
                 </button>
               </>
             )}
@@ -1150,57 +1308,170 @@ export const CriteriaManagementPage: React.FC = () => {
         </div>
       )}
 
-      {/* Version History Modal */}
-      {showVersionHistoryModal && selectedTemplate && (
+      {/* Delete / Archive Confirmation Safety Modal */}
+      {showDeleteModal && selectedTemplate && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm animate-in fade-in">
-          <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-900 space-y-4">
+          <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-900 space-y-5">
+            {/* Modal Header */}
             <div className="flex items-center justify-between border-b border-slate-100 pb-3 dark:border-slate-800">
-              <div className="flex items-center gap-2">
-                <History className="h-4 w-4 text-indigo-600" />
-                <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                  Audit Version History for {selectedTemplate.name}
-                </h3>
+              <div className="flex items-center gap-2.5">
+                <div className="rounded-lg bg-rose-100 p-2 text-rose-600 dark:bg-rose-950/60 dark:text-rose-400">
+                  <Trash2 className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    Delete Observation Template
+                  </h3>
+                  <p className="text-xs text-slate-500 font-mono">
+                    {selectedTemplate.name} ({selectedTemplate.code})
+                  </p>
+                </div>
               </div>
-              <button onClick={() => setShowVersionHistoryModal(false)} className="text-slate-400 hover:text-slate-600">
-                <X className="h-4 w-4" />
+              <button
+                onClick={() => setShowDeleteModal(false)}
+                className="text-slate-400 hover:text-slate-600 transition"
+                disabled={isProcessingDelete}
+              >
+                <X className="h-5 w-5" />
               </button>
             </div>
 
-            <div className="space-y-3 max-h-[60vh] overflow-y-auto">
-              {(selectedTemplate.versions || []).map((ver) => (
-                <div
-                  key={ver.id}
-                  className={`p-4 rounded-xl border ${
-                    ver.id === selectedTemplate.currentVersionId
-                      ? 'border-indigo-300 bg-indigo-50/40 dark:border-indigo-800 dark:bg-indigo-950/20'
-                      : 'border-slate-200 bg-slate-50/50 dark:border-slate-800 dark:bg-slate-800/30'
-                  } space-y-2`}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono text-xs font-bold px-2 py-0.5 rounded bg-indigo-600 text-white">
-                        {ver.versionNumber}
-                      </span>
-                      {ver.id === selectedTemplate.currentVersionId && (
-                        <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">
-                          Current Active Rubric
-                        </span>
-                      )}
-                    </div>
-                    <span className="text-xs text-slate-400">
-                      {new Date(ver.createdAt).toLocaleDateString()}
-                    </span>
-                  </div>
-
-                  <p className="text-xs text-slate-700 dark:text-slate-300 font-medium">
-                    {ver.changeLog || 'Standard release update'}
-                  </p>
-
-                  <div className="text-[11px] text-slate-500 font-mono">
-                    Total Score: {ver.totalScore || selectedTemplate.totalScore || 100} pts • {ver.mainCriteria?.length || 0} Main Criteria
+            {/* Dependency Check Banner */}
+            {isLoadingUsage ? (
+              <div className="flex items-center justify-center py-6 text-xs text-slate-500 gap-2">
+                <RefreshCw className="h-4 w-4 animate-spin text-indigo-600" />
+                <span>Checking template dependencies across observations & reports...</span>
+              </div>
+            ) : deleteUsageInfo?.isUsed ? (
+              <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-900/50 dark:bg-amber-950/30 space-y-3">
+                <div className="flex items-start gap-2.5">
+                  <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <p className="text-xs font-bold text-amber-900 dark:text-amber-200">
+                      Historical Data Protection Active
+                    </p>
+                    <p className="text-xs text-amber-800 dark:text-amber-300 leading-relaxed">
+                      This template is linked to{' '}
+                      <span className="font-bold underline">
+                        {deleteUsageInfo.observationCount} observation(s)
+                      </span>{' '}
+                      ({deleteUsageInfo.historicalCount} finalized/reviewed) and institutional quality reports.
+                    </p>
                   </div>
                 </div>
-              ))}
+
+                <div className="rounded-lg bg-white/80 dark:bg-slate-900/80 p-2.5 border border-amber-200/50 dark:border-amber-800/40 text-[11px] text-amber-900 dark:text-amber-200 space-y-1">
+                  <div className="font-semibold text-amber-950 dark:text-amber-100 flex items-center gap-1">
+                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" /> Safe Archival Protocol:
+                  </div>
+                  <p>
+                    To guarantee <strong>zero data loss</strong> and preserve institutional evaluation history, this template
+                    will <strong>NOT be physically deleted</strong>.
+                  </p>
+                  <p>
+                    It will be converted to <strong>Archived Status</strong>, removed from active rosters, while keeping all historical observations and dashboards intact.
+                  </p>
+                </div>
+
+                {deleteUsageInfo.linkedObservations.length > 0 && (
+                  <div className="space-y-1 text-[11px]">
+                    <span className="font-bold text-amber-900 dark:text-amber-200">Linked Evaluations:</span>
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {deleteUsageInfo.linkedObservations.map((obs) => (
+                        <span
+                          key={obs.id}
+                          className="px-2 py-0.5 rounded bg-amber-100/70 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300 font-mono text-[10px]"
+                        >
+                          {obs.observationCode} ({obs.instructorName})
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="rounded-xl border border-rose-200 bg-rose-50/70 p-4 dark:border-rose-900/50 dark:bg-rose-950/30 space-y-2">
+                <div className="flex items-start gap-2.5">
+                  <AlertTriangle className="h-5 w-5 text-rose-600 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-xs font-bold text-rose-900 dark:text-rose-200">
+                      Permanent Deletion Allowed
+                    </p>
+                    <p className="text-xs text-rose-800 dark:text-rose-300 leading-relaxed mt-0.5">
+                      This template has <strong>0 linked observations</strong> and has never been used. Confirming will permanently erase the template and all of its hierarchical criteria from the database.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Confirmation Question */}
+            <div className="space-y-2">
+              <p className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                Are you sure you want to delete this template?
+              </p>
+              <p className="text-xs text-slate-500">
+                Please type <span className="font-mono font-bold text-rose-600">DELETE</span> in the box below to authorize this action:
+              </p>
+              <input
+                type="text"
+                value={deleteConfirmationInput}
+                onChange={(e) => setDeleteConfirmationInput(e.target.value)}
+                placeholder="Type DELETE to confirm"
+                className="w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-xs font-mono font-bold text-slate-900 focus:border-rose-500 focus:outline-none focus:ring-2 focus:ring-rose-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+              />
+            </div>
+
+            {/* Double Confirmation Checkbox */}
+            <label className="flex items-start gap-2.5 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700 dark:border-slate-800 dark:bg-slate-800/40 dark:text-slate-300 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={hasDoubleConfirmed}
+                onChange={(e) => setHasDoubleConfirmed(e.target.checked)}
+                className="mt-0.5 rounded border-slate-300 text-rose-600 focus:ring-rose-500"
+              />
+              <span className="font-medium">
+                {deleteUsageInfo?.isUsed
+                  ? 'I understand that this template will be safely archived and hidden from active templates while preserving all observation records.'
+                  : 'I confirm that I want to permanently delete this unused template and all associated criteria.'}
+              </span>
+            </label>
+
+            {/* Modal Actions */}
+            <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setShowDeleteModal(false)}
+                disabled={isProcessingDelete}
+                className="rounded-lg border border-slate-200 px-3.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                disabled={
+                  deleteConfirmationInput.trim() !== 'DELETE' ||
+                  !hasDoubleConfirmed ||
+                  isProcessingDelete ||
+                  isLoadingUsage
+                }
+                className="inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-4 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-rose-700 transition disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {isProcessingDelete ? (
+                  <>
+                    <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                    <span>Processing...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span>
+                      {deleteUsageInfo?.isUsed ? 'Confirm Archival' : 'Confirm Permanent Deletion'}
+                    </span>
+                  </>
+                )}
+              </button>
             </div>
           </div>
         </div>

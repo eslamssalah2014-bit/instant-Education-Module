@@ -117,6 +117,8 @@ model ObservationTemplate {
   totalScore       Float                        @default(100.0)
   isActive         Boolean                      @default(true)
   isArchived       Boolean                      @default(false)
+  archivedAt       DateTime?
+  archivedBy       String?
   currentVersionId String?
   createdAt        DateTime                     @default(now())
   updatedAt        DateTime                     @updatedAt
@@ -124,6 +126,7 @@ model ObservationTemplate {
 
   @@index([type])
   @@index([isActive])
+  @@index([isArchived])
 }
 
 model ObservationTemplateVersion {

@@ -182,6 +182,8 @@ export interface ObservationTemplate {
   totalScore: number;
   isActive: boolean;
   isArchived: boolean;
+  archivedAt?: string;
+  archivedBy?: string;
   currentVersionId?: string;
   currentVersion?: ObservationTemplateVersion;
   versions?: ObservationTemplateVersion[];
