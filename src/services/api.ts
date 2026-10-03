@@ -57,7 +57,7 @@ import {
 import { logger } from '../utils/logger';
 
 const DB_VERSION_KEY = 'erp_storage_version';
-const CURRENT_DB_VERSION = 'v200_absolute_zero_reset';
+const CURRENT_DB_VERSION = 'v202_templates_restored';
 
 // Persistent client-side database
 class LocalDatabase {
@@ -87,19 +87,21 @@ class LocalDatabase {
 
   constructor() {
     // Check if browser storage needs migration/reset to clean state
-    const currentVer = localStorage.getItem(DB_VERSION_KEY);
-    if (currentVer !== CURRENT_DB_VERSION) {
-      try {
-        const keysToRemove: string[] = [];
-        for (let i = 0; i < localStorage.length; i++) {
-          const k = localStorage.key(i);
-          if (k && k.startsWith('erp_')) {
-            keysToRemove.push(k);
+    if (typeof localStorage !== 'undefined') {
+      const currentVer = localStorage.getItem(DB_VERSION_KEY);
+      if (currentVer !== CURRENT_DB_VERSION) {
+        try {
+          const keysToRemove: string[] = [];
+          for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i);
+            if (k && k.startsWith('erp_')) {
+              keysToRemove.push(k);
+            }
           }
-        }
-        keysToRemove.forEach((k) => localStorage.removeItem(k));
-      } catch (_) {}
-      localStorage.setItem(DB_VERSION_KEY, CURRENT_DB_VERSION);
+          keysToRemove.forEach((k) => localStorage.removeItem(k));
+        } catch (_) {}
+        localStorage.setItem(DB_VERSION_KEY, CURRENT_DB_VERSION);
+      }
     }
 
     this.users = this.load('erp_users', initialUsers);
@@ -107,11 +109,33 @@ class LocalDatabase {
     this.instructors = this.load('erp_instructors', initialInstructors);
     this.groups = this.load('erp_groups', initialGroups);
     this.sessions = this.load('erp_sessions', []);
+    
+    // Always preserve or fallback to initial system configuration templates & criteria
     this.templates = this.load('erp_templates', initialTemplates);
+    if (!this.templates || this.templates.length === 0) {
+      this.templates = [...initialTemplates];
+      this.save('erp_templates', this.templates);
+    }
     this.templateVersions = this.load('erp_template_versions', initialVersions);
+    if (!this.templateVersions || this.templateVersions.length === 0) {
+      this.templateVersions = [...initialVersions];
+      this.save('erp_template_versions', this.templateVersions);
+    }
     this.criteria = this.load('erp_criteria', initialCriteria);
+    if (!this.criteria || this.criteria.length === 0) {
+      this.criteria = [...initialCriteria];
+      this.save('erp_criteria', this.criteria);
+    }
     this.mainCriteria = this.load('erp_main_criteria', initialMainCriteria);
+    if (!this.mainCriteria || this.mainCriteria.length === 0) {
+      this.mainCriteria = [...initialMainCriteria];
+      this.save('erp_main_criteria', this.mainCriteria);
+    }
     this.subCriteria = this.load('erp_sub_criteria', initialSubCriteria);
+    if (!this.subCriteria || this.subCriteria.length === 0) {
+      this.subCriteria = [...initialSubCriteria];
+      this.save('erp_sub_criteria', this.subCriteria);
+    }
     this.observations = this.load('erp_observations', initialObservations);
     this.mainResults = this.load('erp_main_results', []);
     this.subResults = this.load('erp_sub_results', []);
@@ -124,7 +148,7 @@ class LocalDatabase {
     this.qualityMetrics = this.load('erp_quality_metrics', initialQualityMetrics);
     this.auditLogs = this.load('erp_audit_logs', initialAuditLogs);
 
-    const savedUser = localStorage.getItem('erp_active_user_id');
+    const savedUser = typeof localStorage !== 'undefined' ? localStorage.getItem('erp_active_user_id') : null;
     if (savedUser && this.users.some((u) => u.id === savedUser)) {
       this.currentUserId = savedUser;
     } else {
@@ -137,15 +161,19 @@ class LocalDatabase {
 
   private load<T>(key: string, defaultValue: T): T {
     try {
-      const stored = localStorage.getItem(key);
-      if (stored) return JSON.parse(stored);
+      if (typeof localStorage !== 'undefined') {
+        const stored = localStorage.getItem(key);
+        if (stored) return JSON.parse(stored);
+      }
     } catch (_) {}
     return defaultValue;
   }
 
   private save<T>(key: string, value: T) {
     try {
-      localStorage.setItem(key, JSON.stringify(value));
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(key, JSON.stringify(value));
+      }
     } catch (_) {}
   }
 
@@ -2354,6 +2382,8 @@ class LocalDatabase {
     preserved: {
       roles: number;
       systemUsers: number;
+      templates?: number;
+      criteria?: number;
     };
   } {
     const counts = {
@@ -2376,17 +2406,12 @@ class LocalDatabase {
       sessions: this.sessions.length,
     };
 
-    // Purge ALL business data
+    // Purge dynamic business data
     this.observations = [];
     this.instructors = [];
     this.groups = [];
     this.sessions = [];
     this.tracks = [];
-    this.templates = [];
-    this.templateVersions = [];
-    this.criteria = [];
-    this.mainCriteria = [];
-    this.subCriteria = [];
     this.mainResults = [];
     this.subResults = [];
     this.kpis = [];
@@ -2399,11 +2424,18 @@ class LocalDatabase {
     this.auditLogs = [];
     this.notifications = [];
 
+    // Retain and re-seed system evaluation configuration (Templates & Criteria)
+    this.templates = [...initialTemplates];
+    this.templateVersions = [...initialVersions];
+    this.criteria = [...initialCriteria];
+    this.mainCriteria = [...initialMainCriteria];
+    this.subCriteria = [...initialSubCriteria];
+
     // Retain only system configuration accounts
     this.users = initialUsers;
     this.currentUserId = 'usr-em-1';
 
-    // Wipe all erp localStorage keys
+    // Wipe all dynamic erp localStorage keys
     try {
       const keysToRemove: string[] = [];
       for (let i = 0; i < localStorage.length; i++) {
@@ -2417,6 +2449,11 @@ class LocalDatabase {
 
     localStorage.setItem(DB_VERSION_KEY, CURRENT_DB_VERSION);
     this.save('erp_users', this.users);
+    this.save('erp_templates', this.templates);
+    this.save('erp_template_versions', this.templateVersions);
+    this.save('erp_criteria', this.criteria);
+    this.save('erp_main_criteria', this.mainCriteria);
+    this.save('erp_sub_criteria', this.subCriteria);
 
     logger.info('SYSTEM_DATA_RESET_COMPLETED', counts);
 
@@ -2425,6 +2462,8 @@ class LocalDatabase {
       preserved: {
         roles: 4,
         systemUsers: 1,
+        templates: this.templates.length,
+        criteria: this.mainCriteria.length + this.subCriteria.length,
       },
     };
   }

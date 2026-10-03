@@ -193,6 +193,48 @@ async function seed() {
     }
   }
 
+  // 8b. Observation Main Criteria (Hierarchical)
+  if (store.mainCriteria && store.mainCriteria.length > 0) {
+    console.log(`Seeding ${store.mainCriteria.length} main criteria...`);
+    for (const mc of store.mainCriteria) {
+      await prisma.observationMainCriterion.upsert({
+        where: { id: mc.id },
+        update: {},
+        create: {
+          id: mc.id,
+          templateVersionId: mc.templateVersionId,
+          name: mc.name,
+          description: mc.description || '',
+          weightPercentage: Number(mc.weightPercentage) || 30,
+          calculatedScore: Number(mc.calculatedScore) || 30,
+          orderIndex: Number(mc.orderIndex) || 0,
+          isActive: mc.isActive !== false,
+        },
+      });
+    }
+  }
+
+  // 8c. Observation Sub Criteria (Hierarchical)
+  if (store.subCriteria && store.subCriteria.length > 0) {
+    console.log(`Seeding ${store.subCriteria.length} sub criteria...`);
+    for (const sc of store.subCriteria) {
+      await prisma.observationSubCriterion.upsert({
+        where: { id: sc.id },
+        update: {},
+        create: {
+          id: sc.id,
+          mainCriterionId: sc.mainCriterionId,
+          name: sc.name,
+          description: sc.description || '',
+          weightPercentage: Number(sc.weightPercentage) || 50,
+          calculatedScore: Number(sc.calculatedScore) || 15,
+          orderIndex: Number(sc.orderIndex) || 0,
+          isActive: sc.isActive !== false,
+        },
+      });
+    }
+  }
+
   // 9. Observations
   if (store.observations && store.observations.length > 0) {
     console.log(`Seeding ${store.observations.length} observations...`);
