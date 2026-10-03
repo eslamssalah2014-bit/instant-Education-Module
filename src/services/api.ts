@@ -30,6 +30,8 @@ import {
   TeacherImportRow,
   ImportValidationError,
   GroupImportRow,
+  Session,
+  SessionStatus,
 } from '../types';
 import { supabase } from './supabase';
 import {
@@ -63,6 +65,7 @@ class LocalDatabase {
   private tracks: Track[];
   private instructors: Instructor[];
   private groups: Group[];
+  private sessions: Session[];
   private templates: ObservationTemplate[];
   private templateVersions: ObservationTemplateVersion[];
   private criteria: ObservationCriterion[];
@@ -103,6 +106,7 @@ class LocalDatabase {
     this.tracks = this.load('erp_tracks', initialTracks);
     this.instructors = this.load('erp_instructors', initialInstructors);
     this.groups = this.load('erp_groups', initialGroups);
+    this.sessions = this.load('erp_sessions', []);
     this.templates = this.load('erp_templates', initialTemplates);
     this.templateVersions = this.load('erp_template_versions', initialVersions);
     this.criteria = this.load('erp_criteria', initialCriteria);
@@ -259,7 +263,18 @@ class LocalDatabase {
       const track = this.tracks.find((t) => t.id === g.trackId);
       const instructor = this.instructors.find((i) => i.id === g.instructorId);
       const instructorUser = instructor ? this.users.find((u) => u.id === instructor.userId) : undefined;
-      const obsCount = this.observations.filter((o) => o.groupId === g.id).length;
+      const grpObs = this.observations.filter((o) => o.groupId === g.id);
+      const obsCount = grpObs.length;
+      const grpSessions = this.sessions
+        .filter((s) => s.groupId === g.id)
+        .sort((a, b) => a.sessionNumber - b.sessionNumber);
+      const sessionsCount = grpSessions.length;
+      const observedSessionsCount = grpSessions.filter(
+        (s) => s.status === 'COMPLETED' || grpObs.some((o) => o.sessionId === s.id)
+      ).length;
+      const observationCoverage = sessionsCount > 0
+        ? Number(((observedSessionsCount / sessionsCount) * 100).toFixed(1))
+        : 0;
 
       return {
         ...g,
@@ -269,6 +284,10 @@ class LocalDatabase {
         teacherCode: instructor?.employeeId,
         teacherName: instructorUser?.name || instructor?.title || 'Unassigned',
         observationsCount: obsCount,
+        sessionsCount,
+        observedSessionsCount,
+        observationCoverage,
+        sessions: grpSessions,
       };
     });
 
@@ -292,6 +311,11 @@ class LocalDatabase {
     }
 
     return list;
+  }
+
+  public getGroupById(id: string): (Group & { sessions: Session[]; sessionsCount: number; observedSessionsCount: number; observationCoverage: number }) | null {
+    const list = this.getGroups();
+    return (list.find((g) => g.id === id) as any) || null;
   }
 
   public createGroup(payload: {
@@ -365,7 +389,137 @@ class LocalDatabase {
     const grp = this.groups[idx];
     this.groups.splice(idx, 1);
     this.save('erp_groups', this.groups);
+
+    // Cascade delete associated sessions
+    this.sessions = this.sessions.filter((s) => s.groupId !== id);
+    this.save('erp_sessions', this.sessions);
+
     this.logAction('GROUP_DELETED', 'Group', id, { code: grp.code });
+    return true;
+  }
+
+  // --- Sessions CRUD ---
+  public getSessions(params?: { groupId?: string; search?: string; status?: SessionStatus }): Session[] {
+    let list = this.sessions.map((s) => {
+      const obsCount = this.observations.filter((o) => o.sessionId === s.id).length;
+      const isCompleted = s.status === 'COMPLETED' || obsCount > 0;
+      return {
+        ...s,
+        status: isCompleted ? ('COMPLETED' as SessionStatus) : s.status,
+        observationsCount: obsCount,
+      };
+    });
+
+    if (params?.groupId) {
+      list = list.filter((s) => s.groupId === params.groupId);
+    }
+    if (params?.status) {
+      list = list.filter((s) => s.status === params.status);
+    }
+    if (params?.search) {
+      const q = params.search.toLowerCase();
+      list = list.filter(
+        (s) =>
+          s.sessionName.toLowerCase().includes(q) ||
+          String(s.sessionNumber).includes(q) ||
+          (s.sessionPasscode && s.sessionPasscode.toLowerCase().includes(q))
+      );
+    }
+
+    list.sort((a, b) => a.sessionNumber - b.sessionNumber);
+    return list;
+  }
+
+  public getSessionById(id: string): Session | null {
+    const list = this.getSessions();
+    return list.find((s) => s.id === id) || null;
+  }
+
+  public createSession(data: {
+    groupId: string;
+    sessionNumber?: number;
+    sessionName: string;
+    sessionLink?: string;
+    sessionPasscode?: string;
+    status?: SessionStatus;
+    scheduledDate?: string;
+  }): Session {
+    const grp = this.groups.find((g) => g.id === data.groupId);
+    if (!grp) throw new Error(`Cohort group with ID ${data.groupId} does not exist.`);
+
+    const grpSessions = this.sessions.filter((s) => s.groupId === data.groupId);
+    let sessionNumber = data.sessionNumber;
+    if (!sessionNumber || sessionNumber < 1) {
+      const existingNums = grpSessions.map((s) => s.sessionNumber);
+      sessionNumber = existingNums.length > 0 ? Math.max(...existingNums) + 1 : 1;
+    } else {
+      if (grpSessions.some((s) => s.sessionNumber === sessionNumber)) {
+        throw new Error(`Session #${sessionNumber} already exists in this cohort group.`);
+      }
+    }
+
+    const newSession: Session = {
+      id: `sess-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`,
+      groupId: data.groupId,
+      sessionNumber,
+      sessionName: data.sessionName?.trim() || `Session ${sessionNumber}`,
+      sessionLink: data.sessionLink?.trim() || '',
+      sessionPasscode: data.sessionPasscode?.trim() || '',
+      status: data.status || 'NOT_OBSERVED',
+      scheduledDate: data.scheduledDate || '',
+      observationsCount: 0,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    this.sessions.push(newSession);
+    this.save('erp_sessions', this.sessions);
+    this.logAction('SESSION_CREATED', 'Session', newSession.id, {
+      group: grp.name,
+      sessionNumber: newSession.sessionNumber,
+      sessionName: newSession.sessionName,
+    });
+    return newSession;
+  }
+
+  public updateSession(id: string, updates: Partial<Session>): Session {
+    const idx = this.sessions.findIndex((s) => s.id === id);
+    if (idx === -1) throw new Error(`Session with ID ${id} not found.`);
+
+    const existing = this.sessions[idx];
+
+    if (updates.sessionNumber && updates.sessionNumber !== existing.sessionNumber) {
+      const conflict = this.sessions.some(
+        (s) => s.groupId === existing.groupId && s.id !== id && s.sessionNumber === updates.sessionNumber
+      );
+      if (conflict) {
+        throw new Error(`Session #${updates.sessionNumber} already exists in this cohort group.`);
+      }
+    }
+
+    const updated: Session = {
+      ...existing,
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    };
+
+    this.sessions[idx] = updated;
+    this.save('erp_sessions', this.sessions);
+    this.logAction('SESSION_UPDATED', 'Session', id, updates);
+    return updated;
+  }
+
+  public deleteSession(id: string): boolean {
+    const idx = this.sessions.findIndex((s) => s.id === id);
+    if (idx === -1) throw new Error(`Session with ID ${id} not found.`);
+
+    const sess = this.sessions[idx];
+    this.sessions.splice(idx, 1);
+    this.save('erp_sessions', this.sessions);
+    this.logAction('SESSION_DELETED', 'Session', id, {
+      groupId: sess.groupId,
+      sessionNumber: sess.sessionNumber,
+    });
     return true;
   }
 
@@ -545,9 +699,8 @@ class LocalDatabase {
   public validateGroupImport(rows: any[]): ImportValidationResult<GroupImportRow> {
     const errors: ImportValidationError[] = [];
     const validRows: any[] = [];
-    const seenGroupCodes = new Set<string>();
+    const groupSessionNumbers = new Map<string, Set<number>>();
 
-    const existingGroupCodes = new Set(this.groups.map((g) => g.code.toUpperCase()));
     const teachersMap = new Map<string, Instructor>();
     this.instructors.forEach((i) => {
       const code = (i.employeeId || i.teacherCode || '').toUpperCase();
@@ -564,23 +717,23 @@ class LocalDatabase {
       const endDate = String(raw['End Date'] || raw.endDate || '').trim();
       const status = String(raw['Status'] || raw.status || 'ACTIVE').trim();
 
+      const rawSessionNum =
+        raw['Session Number'] !== undefined && raw['Session Number'] !== ''
+          ? raw['Session Number']
+          : raw.sessionNumber !== undefined
+          ? raw.sessionNumber
+          : '';
+      const sessionNumber = rawSessionNum !== '' ? Number(rawSessionNum) : undefined;
+      const sessionName = String(raw['Session Name'] || raw.sessionName || '').trim();
+      const sessionLink = String(raw['Session Link'] || raw.sessionLink || '').trim();
+      const sessionPasscode = String(raw['Session Passcode'] || raw.sessionPasscode || '').trim();
+
       let rowHasError = false;
 
-      // 1. Required Group Code & uniqueness
+      // 1. Required Group Code
       if (!groupCode) {
         errors.push({ row: rowNum, field: 'Group Code', message: 'Group Code is required.' });
         rowHasError = true;
-      } else {
-        const upper = groupCode.toUpperCase();
-        if (seenGroupCodes.has(upper)) {
-          errors.push({ row: rowNum, field: 'Group Code', value: groupCode, message: 'Duplicate Group Code within this import file.' });
-          rowHasError = true;
-        } else if (existingGroupCodes.has(upper)) {
-          errors.push({ row: rowNum, field: 'Group Code', value: groupCode, message: 'Group Code already exists in the database.' });
-          rowHasError = true;
-        } else {
-          seenGroupCodes.add(upper);
-        }
       }
 
       // 2. Required Group Name
@@ -612,6 +765,26 @@ class LocalDatabase {
         }
       }
 
+      // 5. Session Number uniqueness within this group
+      if (groupCode && sessionNumber !== undefined && !isNaN(sessionNumber)) {
+        const grpUpper = groupCode.toUpperCase();
+        if (!groupSessionNumbers.has(grpUpper)) {
+          groupSessionNumbers.set(grpUpper, new Set<number>());
+        }
+        const setForGroup = groupSessionNumbers.get(grpUpper)!;
+        if (setForGroup.has(sessionNumber)) {
+          errors.push({
+            row: rowNum,
+            field: 'Session Number',
+            value: sessionNumber,
+            message: `Duplicate Session Number #${sessionNumber} for group "${groupCode}".`,
+          });
+          rowHasError = true;
+        } else {
+          setForGroup.add(sessionNumber);
+        }
+      }
+
       if (!rowHasError) {
         const linkedTeacher = teachersMap.get(teacherCode.toUpperCase());
         const teacherUser = linkedTeacher ? this.users.find((u) => u.id === linkedTeacher.userId) : undefined;
@@ -627,6 +800,10 @@ class LocalDatabase {
           startDate,
           endDate,
           status,
+          sessionNumber,
+          sessionName: sessionName || (sessionNumber ? `Session ${sessionNumber}` : undefined),
+          sessionLink,
+          sessionPasscode,
         });
       }
     });
@@ -642,56 +819,117 @@ class LocalDatabase {
   }
 
   public importGroups(rows: any[]): Group[] {
-    const importedGroups: Group[] = [];
+    const groupsByCode = new Map<string, any[]>();
 
     rows.forEach((r) => {
+      const codeKey = String(r.groupCode).trim().toUpperCase();
+      if (!groupsByCode.has(codeKey)) {
+        groupsByCode.set(codeKey, []);
+      }
+      groupsByCode.get(codeKey)!.push(r);
+    });
+
+    const processedGroups: Group[] = [];
+
+    groupsByCode.forEach((groupRows, codeUpper) => {
+      const firstRow = groupRows[0];
+
       // 1. Resolve Teacher
       const teacher = this.instructors.find(
-        (i) => (i.employeeId || i.teacherCode || '').toUpperCase() === String(r.teacherCode).trim().toUpperCase()
+        (i) => (i.employeeId || i.teacherCode || '').toUpperCase() === String(firstRow.teacherCode).trim().toUpperCase()
       );
       if (!teacher) {
-        throw new Error(`Teacher Code "${r.teacherCode}" does not exist in database.`);
+        throw new Error(`Teacher Code "${firstRow.teacherCode}" does not exist in database.`);
       }
 
       // 2. Resolve Track
       let track = this.tracks.find(
         (t) =>
-          t.name.toLowerCase() === String(r.track).toLowerCase().trim() ||
-          t.code.toLowerCase() === String(r.track).toLowerCase().trim()
+          t.name.toLowerCase() === String(firstRow.track).toLowerCase().trim() ||
+          t.code.toLowerCase() === String(firstRow.track).toLowerCase().trim()
       );
       if (!track) {
         track = this.tracks.find((t) => t.id === teacher.trackId) || this.tracks[0];
       }
 
-      const newGroup: Group = {
-        id: `grp-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`,
-        name: r.groupName.trim(),
-        code: r.groupCode.trim(),
-        trackId: track ? track.id : teacher.trackId,
-        track,
-        instructorId: teacher.id,
-        instructor: teacher,
-        term: 'Q4 2026',
-        studentCount: 24,
-        startDate: r.startDate || new Date().toISOString().split('T')[0],
-        endDate: r.endDate || '',
-        status: (r.status as any) || 'ACTIVE',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
+      // Check if group already exists
+      let group = this.groups.find((g) => g.code.toUpperCase() === codeUpper);
+      if (!group) {
+        group = {
+          id: `grp-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`,
+          name: firstRow.groupName.trim(),
+          code: firstRow.groupCode.trim(),
+          trackId: track ? track.id : teacher.trackId,
+          track,
+          instructorId: teacher.id,
+          instructor: teacher,
+          term: 'Q4 2026',
+          studentCount: 24,
+          startDate: firstRow.startDate || new Date().toISOString().split('T')[0],
+          endDate: firstRow.endDate || '',
+          status: (firstRow.status as any) || 'ACTIVE',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        this.groups.unshift(group);
+      } else {
+        group.name = firstRow.groupName.trim();
+        group.instructorId = teacher.id;
+        group.instructor = teacher;
+        group.trackId = track ? track.id : teacher.trackId;
+        group.track = track;
+        group.updatedAt = new Date().toISOString();
+      }
 
-      this.groups.unshift(newGroup);
-      importedGroups.push(newGroup);
+      // 3. Process sessions for this group
+      let autoSessionIndex = 1;
+      const existingGroupSessions = this.sessions.filter((s) => s.groupId === group!.id);
+      if (existingGroupSessions.length > 0) {
+        autoSessionIndex = Math.max(...existingGroupSessions.map((s) => s.sessionNumber)) + 1;
+      }
+
+      groupRows.forEach((r) => {
+        const hasSessionInfo = r.sessionNumber !== undefined || r.sessionName || r.sessionLink || r.sessionPasscode;
+        if (hasSessionInfo || groupRows.length > 1) {
+          let sNum = r.sessionNumber !== undefined && r.sessionNumber !== '' ? Number(r.sessionNumber) : autoSessionIndex++;
+          if (isNaN(sNum)) sNum = autoSessionIndex++;
+
+          const existingSess = this.sessions.find((s) => s.groupId === group!.id && s.sessionNumber === sNum);
+          if (existingSess) {
+            existingSess.sessionName = r.sessionName?.trim() || existingSess.sessionName;
+            if (r.sessionLink) existingSess.sessionLink = r.sessionLink.trim();
+            if (r.sessionPasscode) existingSess.sessionPasscode = r.sessionPasscode.trim();
+            existingSess.updatedAt = new Date().toISOString();
+          } else {
+            const newSession: Session = {
+              id: `sess-${Date.now()}-${Math.floor(100 + Math.random() * 900)}-${sNum}`,
+              groupId: group!.id,
+              sessionNumber: sNum,
+              sessionName: r.sessionName?.trim() || `Session ${sNum}`,
+              sessionLink: r.sessionLink?.trim() || '',
+              sessionPasscode: r.sessionPasscode?.trim() || '',
+              status: 'NOT_OBSERVED',
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            };
+            this.sessions.push(newSession);
+          }
+        }
+      });
+
+      processedGroups.push(group);
     });
 
     this.save('erp_groups', this.groups);
+    this.save('erp_sessions', this.sessions);
 
     this.logAction('GROUPS_BULK_IMPORTED', 'Group', 'bulk', {
-      count: importedGroups.length,
-      sampleCode: importedGroups[0]?.code,
+      groupsCount: processedGroups.length,
+      totalRows: rows.length,
+      sampleCode: processedGroups[0]?.code,
     });
 
-    return importedGroups;
+    return processedGroups;
   }
 
   // --- Instructors CRUD ---
@@ -939,12 +1177,18 @@ class LocalDatabase {
         ? obs.subResults
         : this.subResults.filter((sr) => sr.observationId === obs.id);
 
+      const session = this.sessions.find((s) => s.id === obs.sessionId);
+
       return {
         ...obs,
         instructor: ins ? { ...ins, user } : undefined,
         observer,
         group,
         track,
+        session,
+        sessionId: obs.sessionId,
+        sessionName: obs.sessionName || session?.sessionName,
+        sessionNumber: obs.sessionNumber || session?.sessionNumber,
         templateVersion: version,
         tier,
         mainResults: mainResults.map((mr) => ({
@@ -962,13 +1206,15 @@ class LocalDatabase {
           o.observationCode.toLowerCase().includes(q) ||
           o.instructor?.user?.name?.toLowerCase().includes(q) ||
           o.observer?.name?.toLowerCase().includes(q) ||
-          o.group?.name?.toLowerCase().includes(q)
+          o.group?.name?.toLowerCase().includes(q) ||
+          (o.sessionName && o.sessionName.toLowerCase().includes(q))
       );
     }
 
     if (params.teacherId) list = list.filter((o) => o.instructorId === params.teacherId);
     if (params.trackId) list = list.filter((o) => o.trackId === params.trackId);
     if (params.groupId) list = list.filter((o) => o.groupId === params.groupId);
+    if ((params as any).sessionId) list = list.filter((o) => o.sessionId === (params as any).sessionId);
     if (params.observerId) list = list.filter((o) => o.observerId === params.observerId);
     if (params.observationType) list = list.filter((o) => o.type === params.observationType);
     if (params.status) list = list.filter((o) => o.status === params.status);
@@ -1132,6 +1378,8 @@ class LocalDatabase {
       createdAt: new Date().toISOString(),
     }));
 
+    const session = payload.sessionId ? this.sessions.find((s) => s.id === payload.sessionId) : undefined;
+
     const newObservation: Observation = {
       id: obsId,
       observationCode: code,
@@ -1140,6 +1388,10 @@ class LocalDatabase {
       instructorId: payload.instructorId,
       observerId: payload.observerId || this.currentUserId,
       groupId: payload.groupId,
+      sessionId: payload.sessionId || undefined,
+      session,
+      sessionName: session ? session.sessionName : payload.sessionName,
+      sessionNumber: session ? session.sessionNumber : payload.sessionNumber,
       trackId: instructor.trackId,
       observationDate: payload.observationDate || new Date().toISOString(),
       status: payload.status || 'SUBMITTED',
@@ -1175,6 +1427,13 @@ class LocalDatabase {
     this.save('erp_main_results', this.mainResults);
     this.save('erp_sub_results', this.subResults);
 
+    // Sync session status to COMPLETED if observation is not a draft
+    if (session && (payload.status || 'SUBMITTED') !== 'DRAFT') {
+      session.status = 'COMPLETED';
+      session.updatedAt = new Date().toISOString();
+      this.save('erp_sessions', this.sessions);
+    }
+
     // Recalculate instructor average score
     const instObs = this.observations.filter((o) => o.instructorId === instructor.id && o.status !== 'DRAFT');
     const newTotalObs = instObs.length;
@@ -1195,6 +1454,7 @@ class LocalDatabase {
       percentageScore: finalPercentage,
       totalScore: finalTotalScore,
       maxScore: masterTotalScore,
+      sessionId: newObservation.sessionId,
     });
 
     return newObservation;
@@ -1213,6 +1473,20 @@ class LocalDatabase {
 
     if (payload.percentageScore !== undefined) {
       updated.tier = getTierFromScore(payload.percentageScore);
+    }
+
+    if (payload.sessionId && payload.sessionId !== existing.sessionId) {
+      const sess = this.sessions.find((s) => s.id === payload.sessionId);
+      if (sess) {
+        updated.session = sess;
+        updated.sessionName = sess.sessionName;
+        updated.sessionNumber = sess.sessionNumber;
+        if ((payload.status || existing.status) !== 'DRAFT') {
+          sess.status = 'COMPLETED';
+          sess.updatedAt = new Date().toISOString();
+          this.save('erp_sessions', this.sessions);
+        }
+      }
     }
 
     this.observations[idx] = updated;
@@ -1801,6 +2075,22 @@ class LocalDatabase {
           observationCoveragePct: totalInsts > 0 ? Number(((observedInsts / totalInsts) * 100).toFixed(1)) : 0,
           teachersWithoutGroups: insts.filter((i) => !this.groups.some((g) => g.instructorId === i.id)).length,
           groupsWithoutObservations: this.groups.filter((g) => !this.observations.some((o) => o.groupId === g.id)).length,
+          totalSessions: this.sessions.length,
+          observedSessions: this.sessions.filter(
+            (s) => s.status === 'COMPLETED' || this.observations.some((o) => o.sessionId === s.id)
+          ).length,
+          sessionCoveragePct:
+            this.sessions.length > 0
+              ? Number(
+                  (
+                    (this.sessions.filter(
+                      (s) => s.status === 'COMPLETED' || this.observations.some((o) => o.sessionId === s.id)
+                    ).length /
+                      this.sessions.length) *
+                    100
+                  ).toFixed(1)
+                )
+              : 0,
         },
       },
       trackAnalytics,
@@ -2083,12 +2373,14 @@ class LocalDatabase {
       improvementPlans: this.improvementPlans.length,
       studentFeedback: this.studentFeedback.length,
       auditLogs: this.auditLogs.length,
+      sessions: this.sessions.length,
     };
 
     // Purge ALL business data
     this.observations = [];
     this.instructors = [];
     this.groups = [];
+    this.sessions = [];
     this.tracks = [];
     this.templates = [];
     this.templateVersions = [];
@@ -2164,6 +2456,7 @@ export const api = {
   // Groups
   getGroups: async (params?: { trackId?: string; instructorId?: string; search?: string; status?: string }) =>
     db.getGroups(params),
+  getGroupById: async (id: string) => db.getGroupById(id),
   createGroup: async (data: {
     name: string;
     code?: string;
@@ -2177,6 +2470,22 @@ export const api = {
   }) => db.createGroup(data),
   updateGroup: async (id: string, updates: Partial<Group>) => db.updateGroup(id, updates),
   deleteGroup: async (id: string) => db.deleteGroup(id),
+
+  // Sessions
+  getSessions: async (params?: { groupId?: string; search?: string; status?: SessionStatus }) =>
+    db.getSessions(params),
+  getSessionById: async (id: string) => db.getSessionById(id),
+  createSession: async (data: {
+    groupId: string;
+    sessionNumber?: number;
+    sessionName: string;
+    sessionLink?: string;
+    sessionPasscode?: string;
+    status?: SessionStatus;
+    scheduledDate?: string;
+  }) => db.createSession(data),
+  updateSession: async (id: string, updates: Partial<Session>) => db.updateSession(id, updates),
+  deleteSession: async (id: string) => db.deleteSession(id),
 
   // Instructors
   getInstructors: async (params?: { search?: string; trackId?: string; tier?: string; status?: string }) =>
@@ -2377,6 +2686,24 @@ export const api = {
         subCriteriaBreakdown: subBreakdown,
         weakestAreas,
         strongestAreas,
+      };
+    }
+
+    if (reportType === 'SESSION_COVERAGE') {
+      const groups = db.getGroups(filters?.trackId ? { trackId: filters.trackId } : undefined);
+      return {
+        data: groups.map((g) => ({
+          GroupCode: g.code,
+          GroupName: g.name,
+          Track: g.track?.name || 'Academic Track',
+          Teacher: g.instructor ? (g.instructor.user?.name || g.instructor.title) : 'Unassigned',
+          TotalSessions: g.sessionsCount || 0,
+          ObservedSessions: g.observedSessionsCount || 0,
+          CoveragePercentage: `${(g.observationCoverage || 0).toFixed(1)}%`,
+          Status: g.status,
+          rawName: g.code,
+          rawScore: g.observationCoverage || 0,
+        })),
       };
     }
 

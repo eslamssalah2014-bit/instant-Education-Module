@@ -76,8 +76,28 @@ export interface Group {
   endDate?: string;
   status?: string;
   studentCount: number;
+  sessionsCount?: number;
+  observedSessionsCount?: number;
+  observationCoverage?: number;
+  sessions?: Session[];
   createdAt: string;
   updatedAt: string;
+}
+
+export type SessionStatus = 'NOT_OBSERVED' | 'SCHEDULED' | 'COMPLETED' | 'MISSED';
+
+export interface Session {
+  id: string;
+  groupId: string;
+  sessionNumber: number;
+  sessionName: string;
+  sessionLink?: string;
+  sessionPasscode?: string;
+  status: SessionStatus;
+  scheduledDate?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  observationsCount?: number;
 }
 
 export interface SubCriterion {
@@ -204,6 +224,10 @@ export interface Observation {
   observer?: User;
   groupId: string;
   group?: Group;
+  sessionId?: string;
+  session?: Session;
+  sessionName?: string;
+  sessionNumber?: number;
   trackId: string;
   track?: Track;
   observationDate: string;

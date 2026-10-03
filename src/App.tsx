@@ -21,7 +21,7 @@ export const AppContent: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(true);
   const [editingObservation, setEditingObservation] = useState<Observation | null>(null);
-  const [observationTarget, setObservationTarget] = useState<{ teacherId?: string; groupId?: string } | null>(null);
+  const [observationTarget, setObservationTarget] = useState<{ teacherId?: string; groupId?: string; sessionId?: string } | null>(null);
 
   // Auto-route instructors to instructor portal if visiting restricted manager screens
   useEffect(() => {
@@ -76,9 +76,9 @@ export const AppContent: React.FC = () => {
       case 'groups':
         return (
           <GroupsManagementPage
-            onNavigateToObservation={(teacherId, groupId) => {
+            onNavigateToObservation={(teacherId, groupId, sessionId) => {
               setEditingObservation(null);
-              setObservationTarget({ teacherId, groupId });
+              setObservationTarget({ teacherId, groupId, sessionId });
               setCurrentTab('create-observation');
             }}
           />
@@ -100,6 +100,7 @@ export const AppContent: React.FC = () => {
             editingObservation={editingObservation}
             initialTeacherId={observationTarget?.teacherId}
             initialGroupId={observationTarget?.groupId}
+            initialSessionId={observationTarget?.sessionId}
             onObservationCreated={handleFinishObservation}
             onCancel={() => {
               setEditingObservation(null);

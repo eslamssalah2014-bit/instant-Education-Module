@@ -36,7 +36,8 @@ type ReportType =
   | 'TRACK_PERFORMANCE'
   | 'OBSERVER_PERFORMANCE'
   | 'MONTHLY_OBSERVATIONS'
-  | 'CRITERIA_ANALYSIS';
+  | 'CRITERIA_ANALYSIS'
+  | 'SESSION_COVERAGE';
 
 export const ReportsPage: React.FC = () => {
   const { canExportReports, isHeadOfTrack } = useAuth();
@@ -159,6 +160,12 @@ export const ReportsPage: React.FC = () => {
       label: 'Criteria Analysis',
       icon: TrendingUp,
       desc: 'Rubric criteria variance, high/low scoring points, and pedagogical gaps',
+    },
+    {
+      id: 'SESSION_COVERAGE',
+      label: 'Session Coverage',
+      icon: Layers,
+      desc: 'Observation coverage tracking across cohort groups and scheduled sessions',
     },
   ];
 
@@ -418,6 +425,8 @@ export const ReportsPage: React.FC = () => {
                       ? 'trackName'
                       : activeReport === 'OBSERVER_PERFORMANCE'
                       ? 'observerName'
+                      : activeReport === 'SESSION_COVERAGE'
+                      ? 'GroupCode'
                       : 'Criterion'
                   }
                   stroke="#64748b"
@@ -427,7 +436,7 @@ export const ReportsPage: React.FC = () => {
                   textAnchor="end"
                 />
                 <YAxis
-                  domain={activeReport === 'CRITERIA_ANALYSIS' ? [0, 100] : [0, 10]}
+                  domain={activeReport === 'CRITERIA_ANALYSIS' || activeReport === 'SESSION_COVERAGE' ? [0, 100] : [0, 10]}
                   stroke="#64748b"
                   fontSize={11}
                 />
@@ -443,6 +452,8 @@ export const ReportsPage: React.FC = () => {
                   dataKey={
                     activeReport === 'CRITERIA_ANALYSIS'
                       ? 'rawPct'
+                      : activeReport === 'SESSION_COVERAGE'
+                      ? 'rawScore'
                       : activeReport === 'INSTRUCTOR_PERFORMANCE' ||
                         activeReport === 'TRACK_PERFORMANCE'
                       ? 'averageScore'
@@ -453,6 +464,8 @@ export const ReportsPage: React.FC = () => {
                   name={
                     activeReport === 'CRITERIA_ANALYSIS'
                       ? 'Average Mastery (%)'
+                      : activeReport === 'SESSION_COVERAGE'
+                      ? 'Session Coverage (%)'
                       : 'Average Score (out of 10)'
                   }
                 />

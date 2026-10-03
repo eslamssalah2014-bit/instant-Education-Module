@@ -101,6 +101,7 @@ model Group {
   instructor   Instructor    @relation(fields: [instructorId], references: [id])
   track        Track         @relation(fields: [trackId], references: [id])
   observations Observation[]
+  sessions     Session[]
 
   @@index([trackId])
   @@index([instructorId])
@@ -207,6 +208,7 @@ model Observation {
   instructorId      String
   observerId        String
   groupId           String
+  sessionId         String?
   trackId           String
   observationDate   DateTime                   @default(now())
   status            ObservationStatus          @default(SUBMITTED)
@@ -218,6 +220,7 @@ model Observation {
   createdAt         DateTime                   @default(now())
   updatedAt         DateTime                   @updatedAt
   group             Group                      @relation(fields: [groupId], references: [id])
+  session           Session?                   @relation(fields: [sessionId], references: [id])
   instructor        Instructor                 @relation(fields: [instructorId], references: [id])
   observer          User                       @relation("ObserverUser", fields: [observerId], references: [id])
   templateVersion   ObservationTemplateVersion @relation(fields: [templateVersionId], references: [id])
@@ -231,7 +234,27 @@ model Observation {
   @@index([observerId])
   @@index([trackId])
   @@index([groupId])
+  @@index([sessionId])
   @@index([observationDate])
+  @@index([status])
+}
+
+model Session {
+  id              String        @id @default(uuid())
+  groupId         String
+  sessionNumber   Int
+  sessionName     String
+  sessionLink     String?
+  sessionPasscode String?
+  status          String        @default("NOT_OBSERVED") // NOT_OBSERVED, SCHEDULED, COMPLETED, MISSED
+  scheduledDate   DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  group           Group         @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  observations    Observation[]
+
+  @@unique([groupId, sessionNumber])
+  @@index([groupId])
   @@index([status])
 }
 

@@ -20,11 +20,15 @@ import {
   ArrowLeft,
   Calculator,
   ChevronRight,
+  Copy,
+  ExternalLink,
+  Key,
 } from 'lucide-react';
 import { api } from '../../services/api';
 import {
   Instructor,
   Group,
+  Session,
   ObservationType,
   ObservationTemplateVersion,
   Observation,
@@ -54,15 +58,24 @@ export const CreateObservationPage: React.FC<{
   editingObservation?: Observation | null;
   initialTeacherId?: string;
   initialGroupId?: string;
+  initialSessionId?: string;
   onObservationCreated: (obsId: string) => void;
   onCancel?: () => void;
-}> = ({ editingObservation, initialTeacherId, initialGroupId, onObservationCreated, onCancel }) => {
+}> = ({
+  editingObservation,
+  initialTeacherId,
+  initialGroupId,
+  initialSessionId,
+  onObservationCreated,
+  onCancel,
+}) => {
   const { currentUser, canCreateObservation, isHeadOfTrack } = useAuth();
 
   const isEditMode = Boolean(editingObservation);
 
   const [instructors, setInstructors] = useState<Instructor[]>([]);
   const [assignedGroups, setAssignedGroups] = useState<Group[]>([]);
+  const [availableSessions, setAvailableSessions] = useState<Session[]>([]);
   const [activeTemplateVersion, setActiveTemplateVersion] = useState<ObservationTemplateVersion | null>(null);
 
   // Form Fields
@@ -72,6 +85,9 @@ export const CreateObservationPage: React.FC<{
   const [selectedGroupId, setSelectedGroupId] = useState<string>(
     editingObservation?.groupId || initialGroupId || ''
   );
+  const [selectedSessionId, setSelectedSessionId] = useState<string>(
+    editingObservation?.sessionId || initialSessionId || ''
+  );
   const [observationType, setObservationType] = useState<ObservationType>(
     editingObservation?.type || 'TECHNICAL'
   );
@@ -80,6 +96,14 @@ export const CreateObservationPage: React.FC<{
       ? editingObservation.observationDate.split('T')[0]
       : new Date().toISOString().split('T')[0]
   );
+
+  const [copyNotice, setCopyNotice] = useState<string | null>(null);
+
+  const handleCopy = (text: string, label: string) => {
+    navigator.clipboard.writeText(text);
+    setCopyNotice(`${label} copied!`);
+    setTimeout(() => setCopyNotice(null), 2000);
+  };
 
   // Hierarchical Sub Criteria Scores & Feedback: key is subCriterionId
   const [subScores, setSubScores] = useState<Record<string, SubScoreEntry>>({});
@@ -159,6 +183,37 @@ export const CreateObservationPage: React.FC<{
 
     loadGroups();
   }, [selectedInstructorId, initialGroupId]);
+
+  // 3. Auto-load sessions for selected group
+  useEffect(() => {
+    if (!selectedGroupId) {
+      setAvailableSessions([]);
+      setSelectedSessionId('');
+      return;
+    }
+
+    const loadSessions = async () => {
+      try {
+        const sessList = await api.getSessions({ groupId: selectedGroupId });
+        setAvailableSessions(sessList);
+
+        if (initialSessionId && sessList.some((s) => s.id === initialSessionId)) {
+          setSelectedSessionId(initialSessionId);
+        } else if (!selectedSessionId || !sessList.some((s) => s.id === selectedSessionId)) {
+          if (sessList.length > 0) {
+            const firstPending = sessList.find((s) => s.status !== 'COMPLETED') || sessList[0];
+            setSelectedSessionId(firstPending.id);
+          } else {
+            setSelectedSessionId('');
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load group sessions:', err);
+      }
+    };
+
+    loadSessions();
+  }, [selectedGroupId, initialSessionId]);
 
   // 3. Load Template & Hierarchical Criteria for Selected Type
   useEffect(() => {
@@ -353,6 +408,7 @@ export const CreateObservationPage: React.FC<{
       const payload = {
         instructorId: selectedInstructorId,
         groupId: selectedGroupId,
+        sessionId: selectedSessionId || undefined,
         observationType,
         templateVersionId: activeTemplateVersion?.id,
         observationDate: new Date(observationDate).toISOString(),
@@ -432,6 +488,7 @@ export const CreateObservationPage: React.FC<{
         resultObservation = await api.updateObservation(editingObservation.id, {
           instructorId: selectedInstructorId,
           groupId: selectedGroupId,
+          sessionId: selectedSessionId || undefined,
           type: observationType,
           templateVersionId: activeTemplateVersion?.id,
           observationDate: new Date(observationDate).toISOString(),
@@ -546,14 +603,14 @@ export const CreateObservationPage: React.FC<{
           <div className="flex items-center justify-between border-b border-slate-100 pb-3 dark:border-slate-800">
             <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
               <GraduationCap className="h-4 w-4 text-indigo-600" />
-              Observation Session Information & Teacher Alignment
+              Observation Session Information & Alignment
             </h3>
             <span className="text-[11px] font-semibold text-slate-400">
-              Workflow: Teacher → Assigned Group → Template
+              Workflow: Teacher → Group → Session → Template
             </span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
             {/* Step 1: Select Teacher */}
             <div>
               <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
@@ -587,7 +644,7 @@ export const CreateObservationPage: React.FC<{
                 className="w-full mt-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
               >
                 {assignedGroups.length === 0 ? (
-                  <option value="">No Groups Assigned to Teacher</option>
+                  <option value="">No Groups Assigned</option>
                 ) : (
                   <>
                     <option value="">Select Assigned Cohort...</option>
@@ -601,10 +658,36 @@ export const CreateObservationPage: React.FC<{
               </select>
             </div>
 
-            {/* Step 3: Observation Type */}
+            {/* Step 3: Select Session */}
             <div>
               <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                3. Observation Template *
+                3. Select Session *
+              </label>
+              <select
+                value={selectedSessionId}
+                onChange={(e) => setSelectedSessionId(e.target.value)}
+                disabled={!selectedGroupId}
+                className="w-full mt-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+              >
+                {availableSessions.length === 0 ? (
+                  <option value="">General Cohort Observation</option>
+                ) : (
+                  <>
+                    <option value="">Select Session...</option>
+                    {availableSessions.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        #{s.sessionNumber} - {s.sessionName} ({s.status})
+                      </option>
+                    ))}
+                  </>
+                )}
+              </select>
+            </div>
+
+            {/* Step 4: Observation Type */}
+            <div>
+              <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                4. Observation Template *
               </label>
               <select
                 value={observationType}
@@ -618,7 +701,7 @@ export const CreateObservationPage: React.FC<{
 
             {/* Observation Date */}
             <div>
-              <label className="text-xs font-bold text-slate-700 dark:text-slate-300">Observation Date *</label>
+              <label className="text-xs font-bold text-slate-700 dark:text-slate-300">5. Observation Date *</label>
               <div className="relative mt-1.5">
                 <input
                   type="date"
@@ -630,6 +713,78 @@ export const CreateObservationPage: React.FC<{
               </div>
             </div>
           </div>
+
+          {/* Session Quick Meeting Tools (Link & Passcode) */}
+          {(() => {
+            const currentSession = availableSessions.find((s) => s.id === selectedSessionId);
+            if (!currentSession) return null;
+
+            return (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-indigo-150 bg-indigo-50/70 p-3 dark:border-indigo-900/60 dark:bg-indigo-950/30 animate-in fade-in">
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex items-center gap-1 rounded-md bg-indigo-600 px-2 py-0.5 text-[11px] font-bold text-white">
+                    Session #{currentSession.sessionNumber}
+                  </span>
+                  <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+                    {currentSession.sessionName}
+                  </span>
+                  <span
+                    className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                      currentSession.status === 'COMPLETED'
+                        ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                        : currentSession.status === 'SCHEDULED'
+                        ? 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300'
+                        : 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                    }`}
+                  >
+                    {currentSession.status}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {currentSession.sessionLink && (
+                    <>
+                      <a
+                        href={currentSession.sessionLink}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 rounded-lg bg-indigo-600 px-2.5 py-1 text-xs font-bold text-white shadow-sm hover:bg-indigo-700 transition"
+                      >
+                        <ExternalLink className="h-3 w-3" />
+                        Open Session
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => handleCopy(currentSession.sessionLink!, 'Session Link')}
+                        className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 transition"
+                      >
+                        <Copy className="h-3 w-3" />
+                        Copy Link
+                      </button>
+                    </>
+                  )}
+
+                  {currentSession.sessionPasscode && (
+                    <button
+                      type="button"
+                      onClick={() => handleCopy(currentSession.sessionPasscode!, 'Passcode')}
+                      className="inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-bold text-amber-800 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300 transition"
+                      title="Click to copy passcode"
+                    >
+                      <Key className="h-3 w-3" />
+                      Passcode: {currentSession.sessionPasscode}
+                    </button>
+                  )}
+
+                  {copyNotice && (
+                    <span className="text-[11px] font-bold text-emerald-600 animate-in fade-in">
+                      {copyNotice}
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Smart Filtering Intelligence Banner */}
           {(() => {

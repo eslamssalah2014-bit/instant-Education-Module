@@ -249,7 +249,7 @@ export const DashboardPage: React.FC<{
           )}
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
           <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-850 border border-slate-100 dark:border-slate-800">
             <span className="text-[10px] font-bold uppercase text-slate-400">Total Teachers</span>
             <div className="mt-1 font-mono text-xl font-bold text-slate-900 dark:text-white">
@@ -267,6 +267,24 @@ export const DashboardPage: React.FC<{
           </div>
 
           <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-850 border border-slate-100 dark:border-slate-800">
+            <span className="text-[10px] font-bold uppercase text-slate-400">Total Sessions</span>
+            <div className="mt-1 font-mono text-xl font-bold text-blue-600 dark:text-blue-400">
+              {statsCards.educationWorkload?.totalSessions ?? 0}
+            </div>
+            <span className="text-[10px] text-slate-500">Scheduled sessions</span>
+          </div>
+
+          <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-850 border border-slate-100 dark:border-slate-800">
+            <span className="text-[10px] font-bold uppercase text-slate-400">Session Coverage</span>
+            <div className="mt-1 font-mono text-xl font-bold text-emerald-600 dark:text-emerald-400">
+              {statsCards.educationWorkload?.sessionCoveragePct ?? 0}%
+            </div>
+            <span className="text-[10px] text-slate-500">
+              {statsCards.educationWorkload?.observedSessions ?? 0} observed
+            </span>
+          </div>
+
+          <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-850 border border-slate-100 dark:border-slate-800">
             <span className="text-[10px] font-bold uppercase text-slate-400">Groups / Teacher</span>
             <div className="mt-1 font-mono text-xl font-bold text-purple-600 dark:text-purple-400">
               {statsCards.educationWorkload?.groupsPerTeacher ?? 0}
@@ -275,11 +293,11 @@ export const DashboardPage: React.FC<{
           </div>
 
           <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-850 border border-slate-100 dark:border-slate-800">
-            <span className="text-[10px] font-bold uppercase text-slate-400">Audit Coverage</span>
-            <div className="mt-1 font-mono text-xl font-bold text-emerald-600 dark:text-emerald-400">
+            <span className="text-[10px] font-bold uppercase text-slate-400">Faculty Audited</span>
+            <div className="mt-1 font-mono text-xl font-bold text-teal-600 dark:text-teal-400">
               {statsCards.educationWorkload?.observationCoveragePct ?? 0}%
             </div>
-            <span className="text-[10px] text-slate-500">Faculty observed</span>
+            <span className="text-[10px] text-slate-500">Coverage</span>
           </div>
 
           <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-850 border border-slate-100 dark:border-slate-800">
